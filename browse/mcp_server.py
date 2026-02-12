@@ -572,6 +572,89 @@ def browse_close(browser_id: str = "") -> str:
         return f"Browser {bid} closed."
 
 
+# ─── Scripts ──────────────────────────────────────────────────────────────
+
+
+@mcp.tool
+def browse_scripts() -> str:
+    """List available navigation scripts.
+
+    Scripts are reusable markdown files that describe browsing flows
+    (e.g. "fetch Gmail", "search Google"). Each script has numbered
+    steps the agent follows using browse tools.
+    """
+    from .scripts import list_scripts as _list_scripts
+
+    scripts = _list_scripts()
+    if not scripts:
+        return "No scripts found. Add .md files to ~/.config/browse/scripts/"
+
+    lines = ["Available scripts:", ""]
+    for s in scripts:
+        params = ", ".join(f"{{{p}}}" for p in s.params)
+        param_str = f"  (params: {params})" if params else ""
+        lines.append(f"  {s.name} — {s.title}{param_str}")
+        for i, step in enumerate(s.steps, 1):
+            lines.append(f"    {i}. {step}")
+        lines.append("")
+
+    lines.append("Use browse_run_script to execute a script by name.")
+    return "\n".join(lines)
+
+
+@mcp.tool
+def browse_run_script(name: str, browser_id: str = "", **params: str) -> str:
+    """Load a navigation script and return its steps as instructions.
+
+    The script's steps will be returned as structured instructions.
+    Follow each step sequentially using browse_navigate, browse_click,
+    browse_type, and browse_extract.
+
+    Args:
+        name: Script name (e.g. "google-search") or path to a .md file.
+        browser_id: Which browser to use. Leave empty for the most recent one.
+        **params: Parameters to fill in the script (e.g. query="test").
+    """
+    from .scripts import load_script, format_for_agent
+
+    try:
+        script = load_script(name)
+    except FileNotFoundError as e:
+        return str(e)
+
+    missing = [p for p in script.params if p not in params]
+    if missing:
+        return (
+            f"Script '{script.title}' requires parameters: "
+            + ", ".join(f"{p}=..." for p in missing)
+        )
+
+    instructions = format_for_agent(script, **params)
+
+    # Ensure we have a browser ready
+    if not _browsers:
+        session = get_session_info()
+        if session:
+            bid = _new_id()
+            client = SessionClient(port=session["port"])
+            client.send({"cmd": "ping"})
+            _browsers[bid] = {"driver": None, "mode": "session", "client": client}
+        else:
+            bid = _new_id()
+            driver = launch_session()
+            _browsers[bid] = {"driver": driver, "mode": "quick", "client": None}
+    else:
+        bid, _ = _get_browser(browser_id or None)
+
+    return (
+        f"[Browser {bid}] Running script: {script.title}\n\n"
+        f"{instructions}\n\n"
+        "Follow the steps above using browse_navigate, browse_click, "
+        "browse_type, and browse_extract. Complete each step before "
+        "moving to the next."
+    )
+
+
 # ─── Entry Point ──────────────────────────────────────────────────────────
 
 def main():

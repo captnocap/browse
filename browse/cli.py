@@ -6,6 +6,8 @@
     browse unblock <domain>         — unblock a domain
     browse blocklist                — show all blocked domains
     browse cookies <source>         — import cookies from another browser
+    browse scripts                  — list available navigation scripts
+    browse run <name> [--key=val]   — execute a navigation script
 """
 
 import os
@@ -226,7 +228,61 @@ def main():
         if failed:
             print(f"Could not reach {len(failed)} domains: {', '.join(failed[:10])}")
 
+    elif cmd == "scripts":
+        from .scripts import list_scripts
+        scripts = list_scripts()
+        if not scripts:
+            print("No scripts found.")
+            print(f"  Built-in: {os.path.join(os.path.dirname(__file__), 'scripts')}")
+            print(f"  User:     {os.path.expanduser('~/.config/browse/scripts')}")
+        else:
+            for s in scripts:
+                params = f" ({', '.join('{' + p + '}' for p in s.params)})" if s.params else ""
+                loc = "user" if str(s.path).startswith(os.path.expanduser("~/.config")) else "built-in"
+                print(f"  {s.name:<20} {s.title}{params}  [{loc}]")
+
+    elif cmd == "run":
+        if len(args) < 2:
+            print("Usage: browse run <script-name> [--key=value ...]")
+            sys.exit(1)
+
+        script_name = args[1]
+        params = {}
+        for a in args[2:]:
+            if a.startswith("--") and "=" in a:
+                k, v = a[2:].split("=", 1)
+                params[k] = v
+
+        from .scripts import load_script, format_for_agent
+        try:
+            script = load_script(script_name)
+        except FileNotFoundError as e:
+            print(str(e))
+            sys.exit(1)
+
+        missing = [p for p in script.params if p not in params]
+        if missing:
+            print(f"Missing parameters: {', '.join('--' + p + '=...' for p in missing)}")
+            sys.exit(1)
+
+        from .session import get_session_info, connect_to_session
+        session = get_session_info()
+        if not session:
+            print("No browser session running. Start one first with: browse")
+            sys.exit(1)
+
+        from .agent import AgentBrowser
+        agent = AgentBrowser.connect()
+
+        try:
+            results = agent.run_script(script_name, **params)
+            for i, content in enumerate(results):
+                print(f"\n--- Step {i + 1} ---")
+                print(content.for_llm())
+        finally:
+            agent.detach()
+
     else:
         print(f"Unknown command: {cmd}")
-        print("Usage: browse [block|unblock|blocklist|cookies]")
+        print("Usage: browse [block|unblock|blocklist|cookies|scripts|run]")
         sys.exit(1)

@@ -350,6 +350,62 @@ class AgentBrowser:
                                "Use the AgentBrowser methods instead.")
         return self._driver
 
+    def run_script(self, name_or_path, **params):
+        """Execute a navigation script's direct-executable steps.
+
+        Parses the script, substitutes parameters, and runs steps that
+        map to known browser actions (navigate, click, type, extract).
+        Returns a list of PageContent from extraction steps.
+
+        Args:
+            name_or_path: Script name or path to .md file.
+            **params: Parameter values to substitute in the script.
+
+        Returns:
+            list[PageContent]: Content extracted at each extraction step.
+        """
+        import re
+        from .scripts import load_script
+
+        script = load_script(name_or_path)
+
+        missing = [p for p in script.params if p not in params]
+        if missing:
+            raise ValueError(f"Missing parameters: {', '.join(missing)}")
+
+        def sub(text):
+            for k, v in params.items():
+                text = text.replace(f"{{{k}}}", v)
+            return text
+
+        url_re = re.compile(r"https?://\S+")
+        results = []
+
+        for step in script.steps:
+            step = sub(step)
+            lower = step.lower()
+
+            if lower.startswith("navigate to "):
+                m = url_re.search(step)
+                if m:
+                    content = self.navigate(m.group(0))
+                    results.append(content)
+            elif lower.startswith("wait for "):
+                import time
+                time.sleep(3)
+            elif lower.startswith("click "):
+                pass  # requires AI interpretation for selector
+            elif lower.startswith("type "):
+                pass  # requires AI interpretation for selector
+            elif "extract" in lower:
+                content = self.extract_content()
+                results.append(content)
+
+        if not results:
+            results.append(self.extract_content())
+
+        return results
+
     def quit(self):
         """Close the browser (quick mode) or disconnect (session mode)."""
         if self._is_session_mode:
