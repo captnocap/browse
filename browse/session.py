@@ -42,6 +42,18 @@ SESSION_FILE = os.path.join(
 
 DEFAULT_PORT = 7331
 
+# Color palette assigned round-robin to connected agents.
+_AGENT_COLORS = [
+    ("#00ff88", "green"),
+    ("#00aaff", "blue"),
+    ("#ff8800", "orange"),
+    ("#ff00ff", "magenta"),
+    ("#ffdd00", "yellow"),
+    ("#00ffff", "cyan"),
+    ("#ff4466", "red"),
+    ("#aa88ff", "purple"),
+]
+
 
 def _read_conf():
     """Read browse.conf for TBB/geckodriver paths."""
@@ -101,7 +113,10 @@ class SessionServer:
         self.port = port
         self.lock = threading.Lock()
         self._running = False
-        self._client_count = 0
+        # Per-agent tab tracking: agent_id -> {handle, color, color_name}
+        self._agents = {}
+        self._next_agent_id = 0
+        self._human_tab = driver.current_window_handle
 
     # URLs that indicate a challenge/intercept page.
     # We only need to watch the URL — when the human clears the challenge,
@@ -195,7 +210,7 @@ class SessionServer:
             _time.sleep(poll_interval)
         return {"cleared": False, "reason": "timeout"}
 
-    def handle_command(self, cmd):
+    def handle_command(self, cmd, agent_id=None):
         """Execute a command on the browser. Returns a JSON-serializable result."""
         action = cmd.get("cmd")
 
@@ -305,18 +320,47 @@ class SessionServer:
             return True
 
         elif action == "ping":
+            if agent_id and agent_id in self._agents:
+                agent = self._agents[agent_id]
+                return {
+                    "pong": True,
+                    "agent_id": agent_id,
+                    "color": agent["color"],
+                    "color_name": agent["color_name"],
+                }
             return "pong"
+
+        elif action == "list_agents":
+            agents = []
+            for aid, info in self._agents.items():
+                try:
+                    self.driver.switch_to.window(info["handle"])
+                    url = self.driver.current_url
+                except Exception:
+                    url = "(unknown)"
+                agents.append({
+                    "id": aid,
+                    "color": info["color"],
+                    "color_name": info["color_name"],
+                    "url": url,
+                })
+            # Switch back to requesting agent's tab
+            if agent_id and agent_id in self._agents:
+                self.driver.switch_to.window(self._agents[agent_id]["handle"])
+            return agents
 
         else:
             raise ValueError(f"Unknown command: {action}")
 
     @property
     def client_count(self):
-        return self._client_count
+        return len(self._agents)
 
     def _update_indicator(self):
-        """Toggle the browseagent attribute on the browser chrome root element."""
-        connected = self._client_count > 0
+        """Toggle the browseagent attribute on the browser chrome root element.
+        Must hold self.lock (or be called right after releasing it when safe).
+        """
+        connected = len(self._agents) > 0
         try:
             with self.driver.context(self.driver.CONTEXT_CHROME):
                 if connected:
@@ -330,10 +374,113 @@ class SessionServer:
         except Exception:
             pass
 
+    # ─── Per-Agent Tab Management ─────────────────────────────────────
+
+    def _assign_agent(self):
+        """Open a new tab and assign it to a new agent. Must hold self.lock.
+
+        Uses Firefox's gBrowser.addTab with inBackground:true so the new
+        tab opens silently without stealing the user's focus.
+        """
+        self._next_agent_id += 1
+        agent_id = self._next_agent_id
+        color_idx = (agent_id - 1) % len(_AGENT_COLORS)
+        color, color_name = _AGENT_COLORS[color_idx]
+
+        startpage = 'file://' + os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'startpage.html')
+
+        # Open a background tab via Firefox chrome API (no focus steal)
+        try:
+            with self.driver.context(self.driver.CONTEXT_CHROME):
+                self.driver.execute_script(
+                    "gBrowser.addTab(arguments[0], {"
+                    "  inBackground: true,"
+                    "  triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()"
+                    "});",
+                    startpage,
+                )
+        except Exception:
+            # Fallback: standard window.open (will flash briefly)
+            self.driver.switch_to.window(self._human_tab)
+            self.driver.execute_script("window.open(arguments[0], '_blank');", startpage)
+
+        # The new tab is the one not yet assigned to any agent or the human
+        known = {self._human_tab} | {a["handle"] for a in self._agents.values()}
+        new_handle = [h for h in self.driver.window_handles if h not in known][-1]
+
+        self._agents[agent_id] = {
+            "handle": new_handle,
+            "color": color,
+            "color_name": color_name,
+        }
+
+        # Ensure visual focus stays on the human tab
+        self._restore_human_focus()
+        return agent_id
+
+    def _restore_human_focus(self):
+        """Snap visual focus back to the human's tab via chrome API.
+
+        Uses gBrowser.selectedTab to change the visible tab without
+        affecting Selenium's internal browsing context.
+        """
+        try:
+            with self.driver.context(self.driver.CONTEXT_CHROME):
+                self.driver.execute_script(
+                    "gBrowser.selectTabAtIndex(0);"
+                )
+        except Exception:
+            try:
+                self.driver.switch_to.window(self._human_tab)
+            except Exception:
+                pass
+
+    def _release_agent(self, agent_id):
+        """Close the agent's tab and clean up. Must hold self.lock."""
+        if agent_id not in self._agents:
+            return
+        agent = self._agents.pop(agent_id)
+        try:
+            self.driver.switch_to.window(agent["handle"])
+            self.driver.close()
+        except Exception:
+            pass
+        self._restore_human_focus()
+
+    def _inject_agent_bar(self, agent_id):
+        """Inject a colored indicator bar at the top of the page content."""
+        if agent_id not in self._agents:
+            return
+        color = self._agents[agent_id]["color"]
+        color_name = self._agents[agent_id]["color_name"]
+        js = (
+            "(function(){"
+            "var e=document.getElementById('browse-agent-bar');"
+            "if(e)e.remove();"
+            "var b=document.createElement('div');"
+            "b.id='browse-agent-bar';"
+            "b.style.cssText='position:fixed;top:0;left:0;right:0;"
+            "height:3px;background:" + color + ";"
+            "z-index:2147483647;box-shadow:0 0 10px " + color + ";"
+            "pointer-events:none;';"
+            "b.setAttribute('data-agent','" + color_name + "');"
+            "if(document.body)document.body.prepend(b);"
+            "})();"
+        )
+        try:
+            self.driver.execute_script(js)
+        except Exception:
+            pass
+
+    # Commands after which we re-inject the agent's colored page bar.
+    _NAV_COMMANDS = {"navigate", "back", "forward", "refresh"}
+
     def _handle_client(self, conn, addr):
-        """Handle one client connection. Reads JSON lines, sends responses."""
-        self._client_count += 1
-        self._update_indicator()
+        """Handle one client connection. Opens a dedicated tab for the agent."""
+        with self.lock:
+            agent_id = self._assign_agent()
+            self._update_indicator()
         try:
             with conn:
                 buf = b""
@@ -358,17 +505,28 @@ class SessionServer:
 
                             with self.lock:
                                 try:
-                                    result = self.handle_command(cmd)
+                                    # Switch to this agent's tab
+                                    if agent_id in self._agents:
+                                        self.driver.switch_to.window(
+                                            self._agents[agent_id]["handle"])
+                                    result = self.handle_command(cmd, agent_id=agent_id)
+                                    # Re-inject colored bar after navigation
+                                    if cmd.get("cmd") in self._NAV_COMMANDS:
+                                        self._inject_agent_bar(agent_id)
                                     resp = {"ok": True, "result": result}
                                 except Exception as e:
                                     resp = {"ok": False, "error": str(e)}
+                                finally:
+                                    # Snap visual focus back to human tab
+                                    self._restore_human_focus()
 
                             conn.sendall(json.dumps(resp).encode() + b"\n")
                     except (ConnectionResetError, BrokenPipeError):
                         break
         finally:
-            self._client_count -= 1
-            self._update_indicator()
+            with self.lock:
+                self._release_agent(agent_id)
+                self._update_indicator()
 
     def serve(self):
         """Start the command server. Blocks until shutdown."""
@@ -398,7 +556,7 @@ class SessionServer:
         self._running = False
 
     def start_status_server(self):
-        """Start a tiny HTTP server for the indicator extension to poll."""
+        """Start a tiny HTTP server returning agent status as JSON."""
         from http.server import HTTPServer, BaseHTTPRequestHandler
         session_server = self
 
@@ -408,8 +566,16 @@ class SessionServer:
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
+                agent_list = []
+                for aid, info in session_server._agents.items():
+                    agent_list.append({
+                        "id": aid,
+                        "color": info["color"],
+                        "color_name": info["color_name"],
+                    })
                 self.wfile.write(json.dumps({
-                    "agents": session_server.client_count
+                    "agents": len(session_server._agents),
+                    "agent_list": agent_list,
                 }).encode())
 
             def log_message(self, *args):
@@ -541,8 +707,9 @@ def launch_session(tbb_path=None, geckodriver_path=None,
         'privacy.resistFingerprinting.letterboxing': True,
         'javascript.enabled': True,
         'media.peerconnection.enabled': False,
-        'browser.startup.page': 0,
-        'browser.startup.homepage': 'about:newtab',
+        'browser.startup.page': 1,
+        'browser.startup.homepage': 'file://' + os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'startpage.html'),
         'app.update.enabled': False,
         'extensions.torbutton.versioncheck_enabled': False,
         'extensions.torbutton.prompted_language': True,
@@ -626,8 +793,9 @@ def main():
     with open(SESSION_FILE, "w") as f:
         json.dump(session_info, f, indent=2)
 
-    print(f"  Browser is running.")
+    print(f"  Browser is running (your tab is private).")
     print(f"  Command server on 127.0.0.1:{args.port}")
+    print(f"  Each agent gets its own color-coded tab.")
     print()
     print("  Connect with:  AgentBrowser.connect()")
     print("  Shut down with: Ctrl+C")
@@ -652,8 +820,10 @@ def main():
         while True:
             time.sleep(2)
             try:
-                # Ping the browser — if the window is closed this throws
-                driver.current_url
+                # window_handles doesn't switch tabs — safe for multi-tab
+                handles = driver.window_handles
+                if server._human_tab not in handles:
+                    raise Exception("Human tab closed")
             except Exception:
                 print("\nBrowser closed. Shutting down...")
                 server.shutdown()

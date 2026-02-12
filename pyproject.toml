@@ -22,3 +22,6 @@ browse-mcp = "browse.mcp_server:main"
 
 [tool.setuptools.packages.find]
 include = ["browse*"]
+
+[tool.setuptools.package-data]
+browse = ["startpage.html"]
