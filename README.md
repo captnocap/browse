@@ -5,7 +5,7 @@ AI agent browser with native anti-fingerprinting. Uses Tor Browser's engine for 
 This gives you a browser that looks like a real human's browser to every bot detection system on the internet, controllable from Python.
 
 ```bash
-git clone https://github.com/user/browse.git && cd browse && ./setup.sh
+git clone https://github.com/captnocap/browse.git && cd browse && ./setup.sh
 ```
 
 That's it. Linux x86_64, Python 3.10+. Setup downloads Tor Browser, patches it, and configures your AI frontend. After setup, just ask your AI to browse — it launches the browser automatically. No servers to run, no config to edit.
@@ -33,6 +33,9 @@ Tor Browser solves this at the C++ level. Canvas noise, WebGL spoofing, font res
 - **Binary-patched `navigator.webdriver`** — the property doesn't exist (not overridden to `false`, genuinely `undefined`)
 - **Prompt injection filtering** — extracts only visible page content, strips 15+ CSS hiding tricks used to inject hidden instructions for AI agents
 - **Two operating modes** — quick mode (spawn, use, close) and session mode (persistent browser shared between human and AI)
+- **Agent indicator** — address bar glows green when AI agents are connected, disappears when they disconnect (patched into browser chrome via `omni.ja`)
+- **Cookie import** — import cookies from Firefox, Chrome, Chromium, or Brave so you're logged into your sites
+- **Site blocklist** — prevent agents from navigating to specific domains, with a built-in typosquat/phishing preset
 - **Challenge detection** — automatically detects CAPTCHAs/challenges and waits for human to solve them before resuming
 - **Content stability detection** — waits for dynamically-rendered pages to finish loading before extracting content
 
@@ -43,7 +46,7 @@ Tor Browser solves this at the C++ level. Canvas noise, WebGL spoofing, font res
 ### 1. Setup
 
 ```bash
-git clone https://github.com/user/browse.git
+git clone https://github.com/captnocap/browse.git
 cd browse
 ./setup.sh
 ```
@@ -64,10 +67,10 @@ with AgentBrowser() as browser:
 
 ### 3. Session mode — persistent browser
 
-Start the browser in one terminal:
+Start the browser:
 
 ```bash
-python -m browse.session
+browse
 ```
 
 Connect from Python (any number of times, any terminal):
@@ -81,7 +84,44 @@ print(content.text)
 agent.detach()  # browser stays open
 ```
 
-The browser stays open between connections. You can use it normally with mouse and keyboard while the AI is detached. When the AI connects, it shares the browser with you.
+The browser stays open between connections. You can use it normally with mouse and keyboard while the AI is detached. When an agent connects, the address bar glows green so you always know when AI is active. The glow disappears when all agents disconnect.
+
+### 4. Cookie import
+
+Import cookies from your regular browser so you're already logged into your sites:
+
+```bash
+# Import from Firefox (all cookies)
+browse cookies firefox
+
+# Import only specific domains
+browse cookies firefox github.com google.com
+
+# Other browsers
+browse cookies chrome
+browse cookies brave
+browse cookies /path/to/cookies.json
+```
+
+For large imports (200+ domains), you'll get a confirmation prompt since each domain requires a brief navigation.
+
+### 5. Site blocklist
+
+Block domains that agents cannot navigate to (you can still browse them manually):
+
+```bash
+# Block individual sites
+browse block example.com
+
+# Load the built-in malicious/typosquat preset (47 domains)
+browse block --preset malicious
+
+# Manage
+browse unblock example.com
+browse blocklist
+```
+
+Subdomains are matched automatically — blocking `4chan.org` also blocks `boards.4chan.org`.
 
 ## API
 
@@ -170,11 +210,15 @@ navigator.webdriver  // undefined (not false, not overridden — undefined)
 
 This is the same approach used by [undetected_geckodriver](https://github.com/AShujjah/undetected_geckodriver). The patch is applied automatically on first run.
 
-### Layer 3: Stealth WebExtension
+### Layer 3: Automation indicator patch (`omni.ja`)
+
+Firefox shows a red candy-stripe bar when the browser is under Marionette control. We patch `omni.ja` (the browser's internal chrome archive) to replace this with an agent-aware indicator: the address bar glows green when agents are connected, and returns to normal when they disconnect. The session server toggles a `browseagent` attribute on the browser chrome root element, and the patched CSS responds to it.
+
+### Layer 4: Stealth WebExtension
 
 A minimal WebExtension injected at `document_start` in the MAIN world provides defense-in-depth. It handles edge cases with a prototype-level Proxy override that survives `toString()` inspection. This layer is rarely needed since the binary patch handles the property, but it catches any secondary code paths.
 
-### Layer 4: Prompt injection filtering
+### Layer 5: Prompt injection filtering
 
 When extracting page content for AI consumption, we walk the DOM and check every element's computed style. If an element is hidden by any CSS trick, its entire subtree is skipped:
 
@@ -219,14 +263,17 @@ The AI monitors the URL and page content. Once the challenge clears and the dest
 browse/
 ├── setup.sh                    # One-command setup
 ├── pyproject.toml              # Package config
-├── browse.conf                 # Auto-generated paths (TBB, geckodriver)
+├── browse.conf                 # Auto-generated paths, blocklist (gitignored)
 ├── browse/
 │   ├── __init__.py             # Public API exports
 │   ├── __main__.py             # python -m browse.session entry point
+│   ├── cli.py                  # CLI dispatcher (browse, block, cookies, etc.)
 │   ├── agent.py                # AgentBrowser — main API class
 │   ├── content.py              # Page extraction + prompt injection filtering
+│   ├── cookies.py              # Cookie import (Firefox, Chrome, Brave, JSON)
+│   ├── mcp_server.py           # MCP server for AI frontends
 │   ├── session.py              # Persistent browser session (TCP server/client)
-│   ├── stealth.py              # Binary patcher + stealth WebExtension
+│   ├── stealth.py              # Binary patcher, omni.ja patcher, extensions
 │   └── tbselenium/             # Vendored + modified tor-browser-selenium
 │       ├── common.py           # + USE_DIRECT mode constant
 │       ├── tbdriver.py         # + Direct connection support
@@ -288,7 +335,7 @@ The MCP server supports two modes that the AI agent picks based on context:
 
 **Quick mode** — the agent launches its own browser, does the work, closes it. Supports multiple browsers in parallel for fetching data from several sites at once.
 
-**Session mode** — if you already have a browser open (`python -m browse.session`), the agent detects it and asks if you'd like it to join your session instead. When it disconnects, your browser stays open.
+**Session mode** — if you already have a browser open (`browse`), the agent automatically connects to it. When it disconnects, your browser stays open.
 
 ### Available tools
 
