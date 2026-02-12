@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bot Detection Test Suite</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #333; padding: 20px; }
+        h1 { text-align: center; margin: 20px 0; font-size: 24px; }
+        .subtitle { text-align: center; color: #666; margin-bottom: 30px; font-size: 14px; }
+        .summary { text-align: center; margin: 20px 0 30px; padding: 20px; background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .summary .score { font-size: 48px; font-weight: bold; }
+        .summary .label { font-size: 14px; color: #666; margin-top: 5px; }
+        .section { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; overflow: hidden; }
+        .section-title { background: #f8f8f8; padding: 12px 16px; font-weight: 600; font-size: 14px; border-bottom: 1px solid #eee; }
+        .check { display: flex; align-items: center; padding: 10px 16px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+        .check:last-child { border-bottom: none; }
+        .check .name { flex: 1; }
+        .check .value { flex: 1; color: #666; text-align: right; font-family: monospace; font-size: 12px; max-width: 50%; word-break: break-all; }
+        .check .status { width: 24px; height: 24px; border-radius: 50%; margin-left: 12px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #fff; }
+        .pass { background: #4caf50; }
+        .fail { background: #f44336; }
+        .warn { background: #ff9800; }
+        .info { background: #2196f3; }
+        .note { padding: 10px 16px; font-size: 12px; color: #888; font-style: italic; border-top: 1px solid #f0f0f0; }
+    </style>
+</head>
+<body>
+    <h1>Bot Detection Test Suite</h1>
+    <p class="subtitle">Replicating common checks used by Google, Cloudflare, Akamai, and others</p>
+
+    <div class="summary">
+        <div class="score" id="score">...</div>
+        <div class="label" id="verdict">Running checks...</div>
+    </div>
+
+    <div id="results"></div>
+
+    <script>
+    (function() {
+        var checks = [];
+        var totalChecks = 0;
+        var passedChecks = 0;
+
+        function addCheck(section, name, value, status, detail) {
+            checks.push({ section: section, name: name, value: String(value), status: status, detail: detail || '' });
+            if (status === 'pass') passedChecks++;
+            totalChecks++;
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // 1. WEBDRIVER / AUTOMATION DETECTION
+        // ════════════════════════════════════════════════════════════
+        var S = 'Automation Detection';
+
+        // navigator.webdriver — the #1 bot signal
+        var wd = navigator.webdriver;
+        addCheck(S, 'navigator.webdriver', String(wd),
+            wd ? 'fail' : 'pass',
+            'Primary automation flag. Set true by Selenium/Puppeteer/Playwright.');
+
+        // Selenium-specific DOM properties
+        var seleniumProps = ['__selenium_unwrapped', '__webdriver_evaluate', '__driver_evaluate',
+            '__webdriver_unwrapped', '__driver_unwrapped', '__fxdriver_unwrapped',
+            '_Selenium_IDE_Recorder', '_selenium', 'calledSelenium', '__nightmare',
+            '__phantomas', '__webdriverFunc'];
+        var foundSelenium = [];
+        seleniumProps.forEach(function(p) {
+            if (p in document || p in window) foundSelenium.push(p);
+        });
+        addCheck(S, 'Selenium DOM properties', foundSelenium.length === 0 ? 'none found' : foundSelenium.join(', '),
+            foundSelenium.length === 0 ? 'pass' : 'fail',
+            'Checks for global variables injected by automation frameworks.');
+
+        // $cdc_ — ChromeDriver control property
+        var cdcFound = false;
+        for (var prop in document) {
+            if (prop.match(/^\$cdc_/)) { cdcFound = true; break; }
+        }
+        addCheck(S, 'ChromeDriver $cdc_ property', cdcFound ? 'found' : 'not found',
+            cdcFound ? 'fail' : 'pass',
+            'ChromeDriver injects $cdc_ prefixed properties into the DOM.');
+
+        // Check for webdriver in prototype chain
+        var protoWebdriver = false;
+        try {
+            var desc = Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver');
+            if (desc && desc.get && desc.get.toString().includes('native code')) {
+                protoWebdriver = true;
+            }
+        } catch(e) {}
+        addCheck(S, 'webdriver prototype check', protoWebdriver ? 'native getter present' : 'modified/absent',
+            protoWebdriver ? 'warn' : 'pass',
+            'Checks if navigator.webdriver has a native getter (expected in real browsers, but flag if webdriver=true).');
+
+        // HeadlessChrome / HeadlessFirefox in UA
+        var ua = navigator.userAgent;
+        var headlessUA = /HeadlessChrome|HeadlessFirefox/i.test(ua);
+        addCheck(S, 'Headless user-agent', headlessUA ? 'DETECTED' : 'not detected',
+            headlessUA ? 'fail' : 'pass',
+            'Headless browsers often include "Headless" in the user agent.');
+
+        // ════════════════════════════════════════════════════════════
+        // 2. BROWSER IDENTITY
+        // ════════════════════════════════════════════════════════════
+        S = 'Browser Identity';
+
+        addCheck(S, 'User-Agent', ua.substring(0, 100), 'info');
+
+        // Platform consistency
+        var platform = navigator.platform;
+        addCheck(S, 'navigator.platform', platform, 'info');
+
+        // Check UA/platform mismatch
+        var uaHasWin = /Windows/.test(ua);
+        var uaHasMac = /Macintosh/.test(ua);
+        var uaHasLinux = /Linux/.test(ua);
+        var platWin = /Win/.test(platform);
+        var platMac = /Mac/.test(platform);
+        var platLinux = /Linux/.test(platform);
+        var platformMatch = (uaHasWin && platWin) || (uaHasMac && platMac) || (uaHasLinux && platLinux);
+        addCheck(S, 'UA/platform consistency', platformMatch ? 'consistent' : 'MISMATCH',
+            platformMatch ? 'pass' : 'fail',
+            'User-Agent and navigator.platform should agree on the OS.');
+
+        // Language
+        var lang = navigator.language || navigator.userLanguage;
+        var langs = (navigator.languages || []).join(', ');
+        addCheck(S, 'navigator.language', lang, 'info');
+        addCheck(S, 'navigator.languages', langs || 'empty',
+            langs ? 'pass' : 'warn',
+            'Bots often have empty or minimal language lists.');
+
+        // Timezone
+        var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        addCheck(S, 'Timezone', tz || 'undefined', tz ? 'pass' : 'warn');
+
+        // Do Not Track
+        addCheck(S, 'Do Not Track', navigator.doNotTrack, 'info');
+
+        // ════════════════════════════════════════════════════════════
+        // 3. CANVAS FINGERPRINT
+        // ════════════════════════════════════════════════════════════
+        S = 'Canvas Fingerprint';
+
+        var canvasSupport = !!document.createElement('canvas').getContext;
+        addCheck(S, 'Canvas support', canvasSupport ? 'yes' : 'no',
+            canvasSupport ? 'pass' : 'warn');
+
+        if (canvasSupport) {
+            var canvas = document.createElement('canvas');
+            canvas.width = 300; canvas.height = 50;
+            var ctx = canvas.getContext('2d');
+
+            // Draw test pattern (similar to what fingerprinting services use)
+            ctx.textBaseline = 'top';
+            ctx.font = '14px Arial';
+            ctx.textBaseline = 'alphabetic';
+            ctx.fillStyle = '#f60';
+            ctx.fillRect(125, 1, 62, 20);
+            ctx.fillStyle = '#069';
+            ctx.fillText('BotCheck,./123', 2, 15);
+            ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
+            ctx.fillText('BotCheck,./123', 4, 17);
+
+            var dataUrl = canvas.toDataURL();
+            var hash = 0;
+            for (var i = 0; i < dataUrl.length; i++) {
+                hash = ((hash << 5) - hash) + dataUrl.charCodeAt(i);
+                hash |= 0;
+            }
+
+            addCheck(S, 'Canvas hash', hash.toString(16),
+                'info',
+                'Canvas rendering varies per browser/GPU. Tor Browser adds noise via resistFingerprinting.');
+
+            // Check if canvas is completely uniform (blocked)
+            var imageData = ctx.getImageData(0, 0, 300, 50).data;
+            var allSame = true;
+            for (var i = 4; i < imageData.length; i += 4) {
+                if (imageData[i] !== imageData[0] || imageData[i+1] !== imageData[1]) {
+                    allSame = false; break;
+                }
+            }
+            addCheck(S, 'Canvas rendering', allSame ? 'blocked/uniform' : 'normal',
+                allSame ? 'warn' : 'pass',
+                'Some privacy tools block canvas entirely, returning blank data.');
+
+            // toDataURL permission
+            var canvasBlocked = false;
+            try {
+                canvas.toDataURL();
+            } catch(e) {
+                canvasBlocked = true;
+            }
+            addCheck(S, 'Canvas readback', canvasBlocked ? 'blocked' : 'allowed',
+                'info',
+                'Tor Browser with resistFingerprinting returns randomized canvas data.');
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // 4. WEBGL FINGERPRINT
+        // ════════════════════════════════════════════════════════════
+        S = 'WebGL Fingerprint';
+
+        var glCanvas = document.createElement('canvas');
+        var gl = glCanvas.getContext('webgl') || glCanvas.getContext('experimental-webgl');
+        if (gl) {
+            addCheck(S, 'WebGL support', 'yes', 'pass');
+
+            var debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+            var vendor = debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : 'blocked';
+            var renderer = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : 'blocked';
+            addCheck(S, 'WebGL vendor', vendor,
+                vendor === 'blocked' ? 'info' : 'info',
+                'Tor Browser spoofs this to hide real GPU.');
+            addCheck(S, 'WebGL renderer', renderer,
+                renderer === 'blocked' ? 'info' : 'info',
+                'Tor Browser spoofs this to hide real GPU.');
+
+            // Check if vendor/renderer are spoofed (TB returns generic values)
+            var isSpoofed = vendor === 'Mozilla' || renderer === 'Mozilla';
+            addCheck(S, 'WebGL spoofing detected', isSpoofed ? 'yes (good for privacy)' : 'no (real values exposed)',
+                isSpoofed ? 'pass' : 'warn');
+        } else {
+            addCheck(S, 'WebGL support', 'no', 'warn');
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // 5. SCREEN & WINDOW
+        // ════════════════════════════════════════════════════════════
+        S = 'Screen & Window';
+
+        addCheck(S, 'Screen resolution', screen.width + 'x' + screen.height, 'info');
+        addCheck(S, 'Window inner size', window.innerWidth + 'x' + window.innerHeight, 'info');
+        addCheck(S, 'Window outer size', window.outerWidth + 'x' + window.outerHeight, 'info');
+        addCheck(S, 'Device pixel ratio', window.devicePixelRatio, 'info');
+        addCheck(S, 'Color depth', screen.colorDepth, 'info');
+
+        // Letterboxing detection — TB rounds window size to multiples of 200x100
+        var innerW = window.innerWidth;
+        var innerH = window.innerHeight;
+        var letterboxed = (innerW % 200 === 0) && (innerH % 100 === 0);
+        addCheck(S, 'Letterboxing detected', letterboxed ? 'yes (' + innerW + 'x' + innerH + ')' : 'no',
+            'info',
+            'Tor Browser rounds viewport to 200x100 increments to reduce uniqueness.');
+
+        // screen vs window size mismatch (headless often has 0x0 screen)
+        var screenZero = screen.width === 0 || screen.height === 0;
+        addCheck(S, 'Screen dimensions valid', screenZero ? 'ZERO (headless?)' : 'valid',
+            screenZero ? 'fail' : 'pass');
+
+        // ════════════════════════════════════════════════════════════
+        // 6. HARDWARE & FEATURES
+        // ════════════════════════════════════════════════════════════
+        S = 'Hardware & Features';
+
+        addCheck(S, 'Hardware concurrency', navigator.hardwareConcurrency || 'undefined',
+            'info',
+            'Tor Browser spoofs this to 2.');
+
+        addCheck(S, 'Device memory (GB)', navigator.deviceMemory || 'undefined',
+            'info',
+            'Not available in Firefox/TB.');
+
+        addCheck(S, 'Max touch points', navigator.maxTouchPoints,
+            'info');
+
+        // Plugins
+        var pluginCount = navigator.plugins ? navigator.plugins.length : 0;
+        addCheck(S, 'Browser plugins', pluginCount,
+            'info',
+            'Tor Browser reports minimal/no plugins to reduce fingerprint.');
+
+        // MimeTypes
+        var mimeCount = navigator.mimeTypes ? navigator.mimeTypes.length : 0;
+        addCheck(S, 'MIME types', mimeCount, 'info');
+
+        // Cookie support
+        addCheck(S, 'Cookies enabled', navigator.cookieEnabled ? 'yes' : 'no',
+            navigator.cookieEnabled ? 'pass' : 'warn');
+
+        // ════════════════════════════════════════════════════════════
+        // 7. JAVASCRIPT BEHAVIOR
+        // ════════════════════════════════════════════════════════════
+        S = 'JavaScript Behavior';
+
+        // Notification permission behavior
+        var notifPermission = 'unknown';
+        try {
+            notifPermission = Notification.permission;
+        } catch(e) {
+            notifPermission = 'not available';
+        }
+        addCheck(S, 'Notification permission', notifPermission,
+            'info',
+            'Headless browsers often have "denied" or unavailable.');
+
+        // Permissions API
+        var permsAvailable = 'permissions' in navigator;
+        addCheck(S, 'Permissions API', permsAvailable ? 'available' : 'not available', 'info');
+
+        // Chrome object (should not exist in Firefox/TB)
+        var hasChrome = typeof window.chrome !== 'undefined';
+        addCheck(S, 'window.chrome object', hasChrome ? 'present' : 'absent',
+            'info',
+            'Present in Chrome-based browsers, absent in Firefox/TB.');
+
+        // Function.toString leak — overridden functions show different toString
+        var fnToString = Function.prototype.toString;
+        var nativeToString = true;
+        try {
+            var s = fnToString.call(navigator.__lookupGetter__('webdriver'));
+            if (s && !s.includes('native code')) nativeToString = false;
+        } catch(e) {}
+        addCheck(S, 'Function.toString integrity', nativeToString ? 'intact' : 'modified',
+            nativeToString ? 'pass' : 'warn',
+            'Stealth scripts that override navigator properties can be detected via toString.');
+
+        // Error stack trace leak
+        var stackLeak = false;
+        try {
+            null[0]();
+        } catch(e) {
+            if (e.stack && (/puppeteer|playwright|selenium|webdriver/i.test(e.stack))) {
+                stackLeak = true;
+            }
+        }
+        addCheck(S, 'Stack trace leak', stackLeak ? 'AUTOMATION DETECTED' : 'clean',
+            stackLeak ? 'fail' : 'pass',
+            'Error stacks can reveal automation framework internals.');
+
+        // eval length trick
+        var evalLength = eval.toString().length;
+        addCheck(S, 'eval.toString().length', evalLength,
+            'info',
+            'Different engines return different lengths. Can detect spoofed engines.');
+
+        // ════════════════════════════════════════════════════════════
+        // 8. MEDIA & AUDIO
+        // ════════════════════════════════════════════════════════════
+        S = 'Media & Audio';
+
+        // AudioContext
+        var audioCtx = null;
+        var audioSupport = 'unavailable';
+        try {
+            var AC = window.AudioContext || window.webkitAudioContext;
+            if (AC) {
+                audioCtx = new AC();
+                audioSupport = 'available (sample rate: ' + audioCtx.sampleRate + ')';
+                audioCtx.close();
+            }
+        } catch(e) {
+            audioSupport = 'blocked: ' + e.message;
+        }
+        addCheck(S, 'AudioContext', audioSupport, 'info',
+            'Tor Browser may spoof audio fingerprint via resistFingerprinting.');
+
+        // WebRTC
+        var rtcAvailable = !!(window.RTCPeerConnection || window.webkitRTCPeerConnection || window.mozRTCPeerConnection);
+        addCheck(S, 'WebRTC available', rtcAvailable ? 'yes' : 'no (disabled)',
+            'info',
+            'WebRTC can leak real IP. Tor Browser and our config disable it.');
+
+        // MediaDevices
+        var mediaDevices = !!(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices);
+        addCheck(S, 'MediaDevices API', mediaDevices ? 'available' : 'not available', 'info');
+
+        // ════════════════════════════════════════════════════════════
+        // 9. FONT DETECTION
+        // ════════════════════════════════════════════════════════════
+        S = 'Font Enumeration';
+
+        // Width-based font detection
+        var testFonts = ['Arial', 'Verdana', 'Times New Roman', 'Courier New',
+            'Georgia', 'Comic Sans MS', 'Impact', 'Trebuchet MS',
+            'Lucida Console', 'Tahoma', 'Palatino Linotype',
+            'Segoe UI', 'Helvetica Neue', 'Roboto'];
+        var detectedFonts = [];
+        var baseSpan = document.createElement('span');
+        baseSpan.style.cssText = 'position:absolute;left:-9999px;font-size:72px;';
+        baseSpan.textContent = 'mmmmmmmmmmlli';
+        document.body.appendChild(baseSpan);
+
+        var baseFonts = ['monospace', 'sans-serif', 'serif'];
+        var baseWidths = {};
+        baseFonts.forEach(function(f) {
+            baseSpan.style.fontFamily = f;
+            baseWidths[f] = baseSpan.offsetWidth;
+        });
+
+        testFonts.forEach(function(font) {
+            var detected = false;
+            baseFonts.forEach(function(base) {
+                baseSpan.style.fontFamily = '"' + font + '", ' + base;
+                if (baseSpan.offsetWidth !== baseWidths[base]) detected = true;
+            });
+            if (detected) detectedFonts.push(font);
+        });
+        document.body.removeChild(baseSpan);
+
+        addCheck(S, 'Detected fonts', detectedFonts.length + '/14 test fonts',
+            'info',
+            'Tor Browser restricts font enumeration to a standard set.');
+        addCheck(S, 'Font list', detectedFonts.join(', ') || 'none detected',
+            'info');
+
+        // ════════════════════════════════════════════════════════════
+        // 10. TIMING & PERFORMANCE
+        // ════════════════════════════════════════════════════════════
+        S = 'Timing & Performance';
+
+        // performance.now() precision
+        var times = [];
+        for (var i = 0; i < 20; i++) {
+            times.push(performance.now());
+        }
+        var diffs = [];
+        for (var i = 1; i < times.length; i++) {
+            var d = times[i] - times[i-1];
+            if (d > 0) diffs.push(d);
+        }
+        var minDiff = diffs.length > 0 ? Math.min.apply(null, diffs) : 0;
+        var precision = minDiff > 0 ? minDiff.toFixed(4) + 'ms' : 'sub-ms or clamped';
+        addCheck(S, 'performance.now() precision', precision,
+            'info',
+            'Tor Browser clamps timer precision to reduce timing attacks (typically 100ms or 2ms).');
+
+        // Date.now precision
+        var dateTimes = [];
+        var lastDate = Date.now();
+        for (var i = 0; i < 100; i++) {
+            var now = Date.now();
+            if (now !== lastDate) { dateTimes.push(now - lastDate); lastDate = now; }
+        }
+        var datePrec = dateTimes.length > 0 ? Math.min.apply(null, dateTimes) + 'ms' : 'clamped';
+        addCheck(S, 'Date.now() precision', datePrec, 'info');
+
+        // Navigation timing
+        var navTiming = performance.timing ? 'available' : 'not available';
+        addCheck(S, 'Navigation Timing API', navTiming, 'info');
+
+        // ════════════════════════════════════════════════════════════
+        // 11. NETWORK & CONNECTION
+        // ════════════════════════════════════════════════════════════
+        S = 'Network & Connection';
+
+        var connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        addCheck(S, 'Connection API', connection ? 'available' : 'not available', 'info');
+        if (connection) {
+            addCheck(S, 'Connection type', connection.effectiveType || 'unknown', 'info');
+            addCheck(S, 'Downlink', connection.downlink ? connection.downlink + ' Mbps' : 'unknown', 'info');
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // 12. STORAGE & STATE
+        // ════════════════════════════════════════════════════════════
+        S = 'Storage & State';
+
+        var lsAvailable = false;
+        try { localStorage.setItem('__test', '1'); localStorage.removeItem('__test'); lsAvailable = true; } catch(e) {}
+        addCheck(S, 'localStorage', lsAvailable ? 'available' : 'blocked',
+            lsAvailable ? 'pass' : 'warn');
+
+        var ssAvailable = false;
+        try { sessionStorage.setItem('__test', '1'); sessionStorage.removeItem('__test'); ssAvailable = true; } catch(e) {}
+        addCheck(S, 'sessionStorage', ssAvailable ? 'available' : 'blocked',
+            ssAvailable ? 'pass' : 'warn');
+
+        var idbAvailable = !!window.indexedDB;
+        addCheck(S, 'IndexedDB', idbAvailable ? 'available' : 'blocked',
+            idbAvailable ? 'pass' : 'warn');
+
+        // ════════════════════════════════════════════════════════════
+        // RENDER RESULTS
+        // ════════════════════════════════════════════════════════════
+
+        var sections = {};
+        checks.forEach(function(c) {
+            if (!sections[c.section]) sections[c.section] = [];
+            sections[c.section].push(c);
+        });
+
+        var html = '';
+        for (var section in sections) {
+            html += '<div class="section">';
+            html += '<div class="section-title">' + section + '</div>';
+            sections[section].forEach(function(c) {
+                var statusClass = c.status;
+                var statusLabel = { pass: '\u2713', fail: '\u2717', warn: '!', info: 'i' }[c.status] || '?';
+                html += '<div class="check">';
+                html += '<div class="name">' + c.name + '</div>';
+                html += '<div class="value" title="' + c.value.replace(/"/g, '&quot;') + '">' + c.value + '</div>';
+                html += '<div class="status ' + statusClass + '">' + statusLabel + '</div>';
+                html += '</div>';
+                if (c.detail) {
+                    html += '<div class="note">' + c.detail + '</div>';
+                }
+            });
+            html += '</div>';
+        }
+        document.getElementById('results').innerHTML = html;
+
+        // Score
+        var scoreEl = document.getElementById('score');
+        var verdictEl = document.getElementById('verdict');
+        var pct = totalChecks > 0 ? Math.round((passedChecks / totalChecks) * 100) : 0;
+        scoreEl.textContent = passedChecks + '/' + totalChecks;
+        scoreEl.style.color = passedChecks === totalChecks ? '#4caf50' : (passedChecks > totalChecks * 0.8 ? '#ff9800' : '#f44336');
+
+        if (passedChecks === totalChecks) {
+            verdictEl.textContent = 'All critical checks passed. No automation signals detected.';
+        } else {
+            var failed = totalChecks - passedChecks;
+            verdictEl.textContent = failed + ' check(s) did not pass. See details below.';
+        }
+
+    })();
+    </script>
+</body>
+</html>

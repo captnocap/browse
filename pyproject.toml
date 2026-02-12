@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "browse"
+version = "0.1.0"
+description = "AI agent browser using Tor Browser's anti-fingerprinting engine"
+requires-python = ">=3.10"
+dependencies = [
+    "selenium>=4",
+]
+
+[project.optional-dependencies]
+tor = ["stem"]
+xvfb = ["PyVirtualDisplay"]
+mcp = ["fastmcp>=2.0"]
+
+[project.scripts]
+browse = "browse.cli:main"
+browse-mcp = "browse.mcp_server:main"
+
+[tool.setuptools.packages.find]
+include = ["browse*"]

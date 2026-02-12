@@ -1,0 +1,27 @@
+# Runtime (downloaded by setup.sh)
+runtime/
+
+# Generated config
+browse.conf
+
+# Session state
+.browse_session.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+stealth-test.png
