@@ -80,6 +80,7 @@ HARDENING_PREFS = {
     'startup.homepage_welcome_url': '',
     'startup.homepage_welcome_url.additional': '',
     'datareporting.policy.dataSubmissionPolicyBypassNotification': True,
+    'security.sandbox.warn_unprivileged_namespaces': False,
     'webdriver.load.strategy': 'normal',
 }
 
