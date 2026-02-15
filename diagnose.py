@@ -1,30 +1,12 @@
 #!/usr/bin/env python3
-"""Diagnostic: dump all proxy/network prefs from a running TB instance."""
+"""Diagnostic: dump all proxy/network/RFP prefs from a running Firefox instance."""
 
-import os, sys, json
+from browse.firefox import launch_firefox
 
-conf = {}
-conf_path = os.path.join(os.path.dirname(__file__), "browse.conf")
-if os.path.exists(conf_path):
-    with open(conf_path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                conf[k.strip()] = v.strip()
+print("Launching Firefox ESR in RFP mode...")
+driver = launch_firefox()
 
-TBB_PATH = conf.get("TBB_PATH")
-GECKODRIVER = conf.get("GECKODRIVER_PATH")
-if GECKODRIVER and os.path.isfile(GECKODRIVER):
-    os.environ["PATH"] = os.path.dirname(GECKODRIVER) + ":" + os.environ.get("PATH", "")
-
-from browse.tbselenium.tbdriver import TorBrowserDriver
-from browse.tbselenium import common as cm
-
-print("Launching TB in direct mode...")
-driver = TorBrowserDriver(TBB_PATH, tor_cfg=cm.USE_DIRECT)
-
-print("\n=== Dumping proxy/network prefs from about:config ===\n")
+print("\n=== Dumping privacy/network prefs from about:config ===\n")
 
 # Use chrome context to read all prefs
 with driver.context(driver.CONTEXT_CHROME):
@@ -32,9 +14,11 @@ with driver.context(driver.CONTEXT_CHROME):
         let results = {};
         let prefService = Services.prefs;
         // Get all prefs matching these patterns
-        let patterns = ['network.proxy', 'network.dns', 'extensions.torlauncher',
-                        'extensions.torbutton', 'network.trr', 'network.captive',
-                        'privacy.resistFingerprinting', 'torbrowser'];
+        let patterns = ['network.proxy', 'network.dns', 'network.cookie',
+                        'privacy.resistFingerprinting', 'privacy.firstparty',
+                        'privacy.trackingprotection', 'media.peerconnection',
+                        'geo.enabled', 'dom.battery', 'media.navigator',
+                        'toolkit.telemetry', 'webdriver'];
         for (let pattern of patterns) {
             let children = prefService.getChildList(pattern);
             for (let pref of children) {

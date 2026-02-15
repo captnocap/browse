@@ -6,9 +6,15 @@ Layer 1 — Binary patch: Replaces the "webdriver" string in libxul.so so the
     navigator.webdriver property ceases to exist entirely. Not overridden,
     not false — genuinely undefined, same as a normal browser.
 
+Layer 1b — Omni.ja patch: Replaces the red candy-stripe automation indicator
+    CSS with an agent-aware indicator that glows green when agents connect,
+    plus per-agent tab coloring.
+
 Layer 2 — WebExtension: Injects a content script at document_start in the
     MAIN world that does a prototype-level override of navigator.webdriver
     as defense-in-depth. Handles edge cases like iframes.
+
+All patches work on both Firefox ESR and Tor Browser (same engine).
 """
 
 import json
@@ -36,34 +42,64 @@ def _generate_replacement(length):
     return "".join(random.choices(string.ascii_lowercase, k=length)).encode()
 
 
-def is_patched(tbb_path):
-    """Check if this Tor Browser installation has already been patched."""
-    marker = os.path.join(tbb_path, _PATCH_MARKER)
+def _find_libxul(firefox_path):
+    """Locate libxul.so in a Firefox or Tor Browser directory."""
+    # Firefox ESR: libxul.so is at the root
+    candidate = os.path.join(firefox_path, "libxul.so")
+    if os.path.exists(candidate):
+        return candidate
+    # Tor Browser: libxul.so is under Browser/
+    candidate = os.path.join(firefox_path, "Browser", "libxul.so")
+    if os.path.exists(candidate):
+        return candidate
+    return None
+
+
+def _find_omni(firefox_path):
+    """Locate browser/omni.ja in a Firefox or Tor Browser directory."""
+    # Firefox ESR: browser/omni.ja at the root
+    candidate = os.path.join(firefox_path, "browser", "omni.ja")
+    if os.path.exists(candidate):
+        return candidate
+    # Tor Browser: Browser/browser/omni.ja
+    candidate = os.path.join(firefox_path, "Browser", "browser", "omni.ja")
+    if os.path.exists(candidate):
+        return candidate
+    return None
+
+
+def is_patched(firefox_path):
+    """Check if this Firefox installation has already been patched."""
+    marker = os.path.join(firefox_path, _PATCH_MARKER)
     return os.path.exists(marker)
 
 
-def patch_libxul(tbb_path, force=False):
+def patch_libxul(firefox_path, force=False):
     """Patch libxul.so to remove the navigator.webdriver property.
 
     Replaces the "webdriver" WebIDL property name string with random
     bytes of the same length. This makes navigator.webdriver undefined
     (the property does not exist) rather than true or false.
 
+    Works on both Firefox ESR and Tor Browser installations.
+
     Args:
-        tbb_path: Path to the Tor Browser Bundle directory.
+        firefox_path: Path to the Firefox (or Tor Browser) directory.
         force: Re-patch even if already patched.
 
     Returns:
         True if patched, False if already patched (and not forced).
     """
-    marker_path = os.path.join(tbb_path, _PATCH_MARKER)
+    marker_path = os.path.join(firefox_path, _PATCH_MARKER)
 
     if not force and os.path.exists(marker_path):
         return False
 
-    libxul = os.path.join(tbb_path, "Browser", "libxul.so")
-    if not os.path.exists(libxul):
-        raise FileNotFoundError(f"libxul.so not found at {libxul}")
+    libxul = _find_libxul(firefox_path)
+    if not libxul:
+        raise FileNotFoundError(
+            f"libxul.so not found in {firefox_path}"
+        )
 
     # Read the binary
     with open(libxul, "rb") as f:
@@ -163,52 +199,145 @@ _REMOTE_CONTROL_CSS_NEW = """:root[remotecontrol] {
   animation: agent-pulse 2s ease-in-out infinite !important;
 }
 
-:root[browseagent] .tabbrowser-tab[selected] .tab-line {
+:root[browseagent] #navigator-toolbox {
+  border-bottom: 1px solid #00ff8855 !important;
+}
+
+/* ─── Per-agent tab coloring ─────────────────────────────────────────── */
+/* Each agent's tab gets a browseagent-color attribute set from chrome JS */
+
+.tabbrowser-tab[browseagent-color="green"] > .tab-stack > .tab-background {
+  background: linear-gradient(to bottom, rgba(0,255,136,0.18), transparent) !important;
+}
+.tabbrowser-tab[browseagent-color="green"] > .tab-stack > .tab-background > .tab-context-line {
   background-color: #00ff88 !important;
+  display: block !important;
   opacity: 1 !important;
   height: 3px !important;
 }
 
-:root[browseagent] #navigator-toolbox {
-  border-bottom: 1px solid #00ff8855 !important;
+.tabbrowser-tab[browseagent-color="blue"] > .tab-stack > .tab-background {
+  background: linear-gradient(to bottom, rgba(0,170,255,0.18), transparent) !important;
+}
+.tabbrowser-tab[browseagent-color="blue"] > .tab-stack > .tab-background > .tab-context-line {
+  background-color: #00aaff !important;
+  display: block !important;
+  opacity: 1 !important;
+  height: 3px !important;
+}
+
+.tabbrowser-tab[browseagent-color="orange"] > .tab-stack > .tab-background {
+  background: linear-gradient(to bottom, rgba(255,136,0,0.18), transparent) !important;
+}
+.tabbrowser-tab[browseagent-color="orange"] > .tab-stack > .tab-background > .tab-context-line {
+  background-color: #ff8800 !important;
+  display: block !important;
+  opacity: 1 !important;
+  height: 3px !important;
+}
+
+.tabbrowser-tab[browseagent-color="magenta"] > .tab-stack > .tab-background {
+  background: linear-gradient(to bottom, rgba(255,0,255,0.18), transparent) !important;
+}
+.tabbrowser-tab[browseagent-color="magenta"] > .tab-stack > .tab-background > .tab-context-line {
+  background-color: #ff00ff !important;
+  display: block !important;
+  opacity: 1 !important;
+  height: 3px !important;
+}
+
+.tabbrowser-tab[browseagent-color="yellow"] > .tab-stack > .tab-background {
+  background: linear-gradient(to bottom, rgba(255,221,0,0.18), transparent) !important;
+}
+.tabbrowser-tab[browseagent-color="yellow"] > .tab-stack > .tab-background > .tab-context-line {
+  background-color: #ffdd00 !important;
+  display: block !important;
+  opacity: 1 !important;
+  height: 3px !important;
+}
+
+.tabbrowser-tab[browseagent-color="cyan"] > .tab-stack > .tab-background {
+  background: linear-gradient(to bottom, rgba(0,255,255,0.18), transparent) !important;
+}
+.tabbrowser-tab[browseagent-color="cyan"] > .tab-stack > .tab-background > .tab-context-line {
+  background-color: #00ffff !important;
+  display: block !important;
+  opacity: 1 !important;
+  height: 3px !important;
+}
+
+.tabbrowser-tab[browseagent-color="red"] > .tab-stack > .tab-background {
+  background: linear-gradient(to bottom, rgba(255,68,102,0.18), transparent) !important;
+}
+.tabbrowser-tab[browseagent-color="red"] > .tab-stack > .tab-background > .tab-context-line {
+  background-color: #ff4466 !important;
+  display: block !important;
+  opacity: 1 !important;
+  height: 3px !important;
+}
+
+.tabbrowser-tab[browseagent-color="purple"] > .tab-stack > .tab-background {
+  background: linear-gradient(to bottom, rgba(170,136,255,0.18), transparent) !important;
+}
+.tabbrowser-tab[browseagent-color="purple"] > .tab-stack > .tab-background > .tab-context-line {
+  background-color: #aa88ff !important;
+  display: block !important;
+  opacity: 1 !important;
+  height: 3px !important;
 }"""
 
 
-def is_omni_patched(tbb_path):
+def is_omni_patched(firefox_path):
     """Check if omni.ja has been patched."""
-    marker = os.path.join(tbb_path, _OMNI_PATCH_MARKER)
+    marker = os.path.join(firefox_path, _OMNI_PATCH_MARKER)
     return os.path.exists(marker)
 
 
-def patch_omni(tbb_path, force=False):
+def patch_omni(firefox_path, force=False):
     """Patch omni.ja to replace the red automation indicator with the agent glow.
 
     Replaces the candy-stripe remote control CSS with:
     - Hidden by default (no red bar)
-    - Green glow when browse.agent.connected pref is true
+    - Green glow when agents are connected
+    - Per-agent tab coloring
+
+    Works on both Firefox ESR and Tor Browser installations.
 
     Args:
-        tbb_path: Path to the Tor Browser Bundle directory.
+        firefox_path: Path to the Firefox (or Tor Browser) directory.
         force: Re-patch even if already patched.
 
     Returns:
         True if patched, False if already patched (and not forced).
     """
-    marker_path = os.path.join(tbb_path, _OMNI_PATCH_MARKER)
+    marker_path = os.path.join(firefox_path, _OMNI_PATCH_MARKER)
 
     if not force and os.path.exists(marker_path):
         return False
 
-    omni_path = os.path.join(tbb_path, "Browser", "browser", "omni.ja")
-    if not os.path.exists(omni_path):
-        raise FileNotFoundError(f"omni.ja not found at {omni_path}")
+    omni_path = _find_omni(firefox_path)
+    if not omni_path:
+        raise FileNotFoundError(
+            f"browser/omni.ja not found in {firefox_path}"
+        )
 
     css_file = "chrome/browser/skin/classic/browser/urlbar-searchbar.css"
 
     # Read the existing omni.ja
     tmp_path = omni_path + ".tmp"
     patched = False
-    with zipfile.ZipFile(omni_path, "r") as zin:
+
+    try:
+        zin = zipfile.ZipFile(omni_path, "r")
+    except (zipfile.BadZipFile, Exception) as e:
+        # Corrupt or unreadable zip - skip patching
+        print(f"  Warning: Cannot read {omni_path}: {e}")
+        print(f"           Skipping omni.ja patch (indicator CSS will use defaults)")
+        with open(marker_path, "w") as f:
+            f.write("omni_skipped_corrupt")
+        return False
+
+    with zin:
         with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
             for item in zin.infolist():
                 data = zin.read(item.filename)

@@ -266,6 +266,21 @@ return (function() {
 })();
 """
 
+# Chrome-context variant: wraps the same extraction logic in an IIFE that
+# receives (window, document) as parameters.  When executed from chrome
+# context the caller binds these to browser.contentWindow / contentDocument,
+# so the extraction code runs against a specific background tab without
+# ever switching the selected tab.
+_EXTRACT_BODY = EXTRACT_CONTENT_JS.replace(
+    "return (function() {", "", 1
+).rsplit("})();", 1)[0]
+
+EXTRACT_CONTENT_JS_CHROME = (
+    "\nreturn (function(window, document) {"
+    + _EXTRACT_BODY
+    + "\n})(win, doc);\n"
+)
+
 
 def extract_page_content(driver) -> PageContent:
     """Extract structured content from the current page."""

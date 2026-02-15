@@ -1,6 +1,7 @@
 """MCP server for browse — anti-fingerprint browser tools for AI agents.
 
-Supports two modes:
+Uses Firefox ESR with privacy.resistFingerprinting (RFP) for C++-level
+anti-fingerprinting. Supports two modes:
   - Quick browsers: agent spawns one or more browsers, uses them, closes
     them. Supports parallel browsing across multiple instances.
   - Session: agent joins an existing human-controlled browser session.
@@ -30,7 +31,6 @@ from mcp.types import TextContent, ImageContent
 from .content import extract_page_content
 from .session import SessionClient, get_session_info, launch_session
 from .agent import _dict_to_page_content
-from .stealth import patch_libxul, is_patched
 
 mcp = FastMCP(
     "browse",
@@ -243,10 +243,7 @@ def _format_result(content, browser_id):
     """Format page content with actions menu."""
     lines = [content.for_llm()]
     lines.append("")
-    browser = _browsers.get(browser_id, {})
-    color_name = browser.get("color_name", "")
-    color_tag = f" ({color_name} tab)" if color_name else ""
-    lines.append(f"[Browser {browser_id}{color_tag}]")
+    lines.append(f"[Browser {browser_id}]")
     lines.append("")
     lines.append("--- What would you like to do? ---")
 
@@ -290,18 +287,10 @@ def browse_status() -> str:
         if session:
             bid = _new_id()
             client = SessionClient(port=session["port"])
-            agent_info = client.send({"cmd": "ping"})
-            agent_meta = {}
-            if isinstance(agent_info, dict):
-                agent_meta = {
-                    "agent_id": agent_info.get("agent_id"),
-                    "color": agent_info.get("color"),
-                    "color_name": agent_info.get("color_name"),
-                }
-            _browsers[bid] = {"driver": None, "mode": "session", "client": client, **agent_meta}
+            client.send({"cmd": "ping"})
+            _browsers[bid] = {"driver": None, "mode": "session", "client": client}
             content = _extract(_browsers[bid])
-            color_tag = f" ({agent_meta.get('color_name', '')} tab)" if agent_meta.get("color_name") else ""
-            return f"Connected as Browser {bid}{color_tag}.\n\n" + _format_result(content, bid)
+            return f"Connected as Browser {bid}.\n\n" + _format_result(content, bid)
 
     # Otherwise report what's open
     lines = []
@@ -310,8 +299,6 @@ def browse_status() -> str:
         lines.append(f"Active browsers: {len(_browsers)}")
         for bid, b in _browsers.items():
             mode = b["mode"]
-            color_name = b.get("color_name", "")
-            color_tag = f" {color_name}" if color_name else ""
             try:
                 if mode == "session":
                     url = b["client"].send({"cmd": "current_url"})
@@ -319,7 +306,7 @@ def browse_status() -> str:
                     url = b["driver"].current_url
             except Exception:
                 url = "(unknown)"
-            lines.append(f"  Browser {bid} [{mode}{color_tag}]: {url}")
+            lines.append(f"  Browser {bid} [{mode}]: {url}")
     else:
         lines.append("No browsers open. Use browse_open to launch a browser.")
 
@@ -333,7 +320,7 @@ def browse_status() -> str:
 def browse_open(url: str = "") -> str:
     """Launch a new browser and optionally navigate to a URL.
 
-    The browser runs with full anti-fingerprinting (Tor Browser engine)
+    The browser runs with full anti-fingerprinting (Firefox ESR + RFP)
     and won't trigger bot detection. Returns a browser ID for use with
     other tools. Multiple browsers can be open simultaneously for
     parallel browsing.
@@ -361,8 +348,9 @@ def browse_open(url: str = "") -> str:
 def browse_connect() -> str:
     """Attach to an available browser session.
 
-    Connects to a running browser and opens a dedicated tab for this agent.
-    Use browse_close when done to disconnect (the browser stays open).
+    Connects to the human's running browser so you can see and interact
+    with whatever page they have open. Use browse_close when done to
+    disconnect (the browser stays open).
     """
     session = get_session_info()
     if session is None:
@@ -372,21 +360,12 @@ def browse_connect() -> str:
 
     bid = _new_id()
     client = SessionClient(port=session["port"])
-    agent_info = client.send({"cmd": "ping"})
+    client.send({"cmd": "ping"})
 
-    agent_meta = {}
-    if isinstance(agent_info, dict):
-        agent_meta = {
-            "agent_id": agent_info.get("agent_id"),
-            "color": agent_info.get("color"),
-            "color_name": agent_info.get("color_name"),
-        }
-
-    _browsers[bid] = {"driver": None, "mode": "session", "client": client, **agent_meta}
+    _browsers[bid] = {"driver": None, "mode": "session", "client": client}
 
     content = _extract(_browsers[bid])
-    color_tag = f" ({agent_meta.get('color_name', '')} tab)" if agent_meta.get("color_name") else ""
-    return f"Connected as Browser {bid}{color_tag}.\n\n" + _format_result(content, bid)
+    return f"Connected as Browser {bid}.\n\n" + _format_result(content, bid)
 
 
 @mcp.tool
@@ -669,15 +648,8 @@ def browse_run_script(name: str, params: str = "", browser_id: str = "") -> str:
         if session:
             bid = _new_id()
             client = SessionClient(port=session["port"])
-            agent_info = client.send({"cmd": "ping"})
-            agent_meta = {}
-            if isinstance(agent_info, dict):
-                agent_meta = {
-                    "agent_id": agent_info.get("agent_id"),
-                    "color": agent_info.get("color"),
-                    "color_name": agent_info.get("color_name"),
-                }
-            _browsers[bid] = {"driver": None, "mode": "session", "client": client, **agent_meta}
+            client.send({"cmd": "ping"})
+            _browsers[bid] = {"driver": None, "mode": "session", "client": client}
         else:
             bid = _new_id()
             driver = launch_session()

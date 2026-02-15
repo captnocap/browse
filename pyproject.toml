@@ -4,15 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "browse"
-version = "0.1.0"
-description = "AI agent browser using Tor Browser's anti-fingerprinting engine"
+version = "2.0.0"
+description = "AI agent browser using Firefox ESR with RFP anti-fingerprinting"
 requires-python = ">=3.10"
 dependencies = [
     "selenium>=4",
 ]
 
 [project.optional-dependencies]
-tor = ["stem"]
 xvfb = ["PyVirtualDisplay"]
 mcp = ["fastmcp>=2.0"]
 

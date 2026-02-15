@@ -23,17 +23,12 @@ import sys
 import threading
 import time
 
-from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.firefox.options import Options
-from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-from .tbselenium import common as cm
-from .tbselenium.utils import set_tbb_pref, prepend_to_env_var
+from .firefox import launch_firefox
 from .content import extract_page_content
-from .stealth import patch_libxul, is_patched, patch_omni, is_omni_patched, build_stealth_extension
 
 SESSION_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -41,65 +36,6 @@ SESSION_FILE = os.path.join(
 )
 
 DEFAULT_PORT = 7331
-
-# Color palette assigned round-robin to connected agents.
-_AGENT_COLORS = [
-    ("#00ff88", "green"),
-    ("#00aaff", "blue"),
-    ("#ff8800", "orange"),
-    ("#ff00ff", "magenta"),
-    ("#ffdd00", "yellow"),
-    ("#00ffff", "cyan"),
-    ("#ff4466", "red"),
-    ("#aa88ff", "purple"),
-]
-
-
-def _read_conf():
-    """Read browse.conf for TBB/geckodriver paths."""
-    conf = {}
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    conf_path = os.path.join(here, "browse.conf")
-    if os.path.exists(conf_path):
-        with open(conf_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    conf[k.strip()] = v.strip()
-    return conf
-
-
-def _setup_env(tbb_path):
-    """Set up LD_LIBRARY_PATH, FONTCONFIG, etc. for Tor Browser."""
-    browser_dir = os.path.join(tbb_path, cm.DEFAULT_TBB_BROWSER_DIR)
-    tor_binary_dir = os.path.join(tbb_path, cm.DEFAULT_TOR_BINARY_DIR)
-    os.environ["LD_LIBRARY_PATH"] = tor_binary_dir
-    os.environ["FONTCONFIG_PATH"] = os.path.join(
-        tbb_path, cm.DEFAULT_FONTCONFIG_PATH)
-    os.environ["FONTCONFIG_FILE"] = cm.FONTCONFIG_FILE
-    os.environ["HOME"] = browser_dir
-    prepend_to_env_var("PATH", browser_dir)
-    os.chdir(browser_dir)
-
-
-def _apply_direct_prefs(driver):
-    """Force direct-connection prefs via about:config on a running browser."""
-    prefs = {
-        'network.proxy.type': 0,
-        'network.proxy.socks': '',
-        'network.proxy.socks_port': 0,
-        'network.proxy.socks_remote_dns': False,
-        'network.proxy.http': '',
-        'network.proxy.http_port': 0,
-        'network.proxy.ssl': '',
-        'network.proxy.ssl_port': 0,
-        'network.proxy.no_proxies_on': '',
-        'network.dns.disabled': False,
-        'extensions.torlauncher.start_tor': False,
-    }
-    for name, value in prefs.items():
-        set_tbb_pref(driver, name, value)
 
 
 # ─── Command Server ──────────────────────────────────────────────────────
@@ -113,29 +49,17 @@ class SessionServer:
         self.port = port
         self.lock = threading.Lock()
         self._running = False
-        # Per-agent tab tracking: agent_id -> {handle, color, color_name}
-        self._agents = {}
-        self._next_agent_id = 0
-        self._human_tab = driver.current_window_handle
+        self._client_count = 0
 
-    # URLs that indicate a challenge/intercept page.
-    # We only need to watch the URL — when the human clears the challenge,
-    # the browser navigates away to the real destination.
     CHALLENGE_URL_PATTERNS = [
-        # Google intercepts with /sorry/ before showing results
         ("/sorry/", "google_captcha"),
         ("google.com/sorry", "google_captcha"),
-        # Cloudflare challenge pages
         ("/cdn-cgi/challenge", "cloudflare"),
-        # Generic captcha services
         ("captcha", "captcha"),
     ]
 
     def detect_challenge(self):
-        """Check if the current URL is a known challenge/intercept page.
-
-        Returns a challenge type string if detected, or None if clear.
-        """
+        """Check if the current URL is a known challenge/intercept page."""
         try:
             url = self.driver.current_url
             for pattern, challenge_type in self.CHALLENGE_URL_PATTERNS:
@@ -155,84 +79,68 @@ class SessionServer:
             return 0
 
     def _wait_for_stable_content(self, max_wait=5.0):
-        """Wait for the page to stop loading by watching link count stabilize.
+        """Wait for the page to stop loading by watching link count stabilize."""
+        deadline = time.time() + max_wait
 
-        Grabs an initial count, waits a beat, checks again. If the count
-        grew, the page is still rendering — wait and re-check. Once it
-        stabilizes (two consecutive reads match), return the content.
-        """
-        import time as _time
-        deadline = _time.time() + max_wait
-
-        # Wait for at least one link to appear
-        while _time.time() < deadline:
+        while time.time() < deadline:
             count = self._link_count()
             if count > 0:
                 break
-            _time.sleep(0.3)
+            time.sleep(0.3)
 
-        # Double-tap: check if count is still growing
-        while _time.time() < deadline:
+        while time.time() < deadline:
             first_count = self._link_count()
-            _time.sleep(0.5)
+            time.sleep(0.5)
             second_count = self._link_count()
             if second_count == first_count:
-                break  # stable
+                break
 
-        content = extract_page_content(self.driver)
-        return content
+        return extract_page_content(self.driver)
 
     def wait_for_challenge_clear(self, challenge_url, poll_interval=1.0, timeout=120):
-        """Poll until the URL changes away from the challenge page
-        AND the destination page has fully rendered.
-        """
-        import time as _time
-        deadline = _time.time() + timeout
-        while _time.time() < deadline:
+        """Poll until the URL changes away from the challenge page."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
             try:
                 current = self.driver.current_url
                 if current != challenge_url and self.detect_challenge() is None:
                     content = self._wait_for_stable_content()
                     return {
                         "cleared": True,
-                        "url": content.url, "title": content.title,
-                        "text": content.text,
-                        "links": [{"text": l.text, "href": l.href} for l in content.links],
-                        "forms": [{"action": f.action, "method": f.method,
-                                   "fields": [{"name": ff.name, "type": ff.type,
-                                               "value": ff.value, "placeholder": ff.placeholder}
-                                              for ff in f.fields]}
-                                  for f in content.forms],
-                        "meta": content.meta,
+                        **self._content_to_dict(content),
                     }
             except Exception:
                 pass
-            _time.sleep(poll_interval)
+            time.sleep(poll_interval)
         return {"cleared": False, "reason": "timeout"}
 
-    def handle_command(self, cmd, agent_id=None):
+    @staticmethod
+    def _content_to_dict(content):
+        """Convert PageContent to a JSON-serializable dict."""
+        return {
+            "url": content.url, "title": content.title,
+            "text": content.text,
+            "links": [{"text": l.text, "href": l.href} for l in content.links],
+            "forms": [{"action": f.action, "method": f.method,
+                       "fields": [{"name": ff.name, "type": ff.type,
+                                   "value": ff.value, "placeholder": ff.placeholder}
+                                  for ff in f.fields]}
+                      for f in content.forms],
+            "meta": content.meta,
+        }
+
+    def handle_command(self, cmd):
         """Execute a command on the browser. Returns a JSON-serializable result."""
         action = cmd.get("cmd")
 
         if action == "navigate":
             self.driver.set_page_load_timeout(cmd.get("timeout", 30))
             self.driver.get(cmd["url"])
-            # Check for challenge after navigation
             challenge = self.detect_challenge()
             if challenge:
                 return {"challenge": challenge, "url": self.driver.current_url}
             content = self._wait_for_stable_content()
-            return {
-                "url": content.url, "title": content.title,
-                "text": content.text,
-                "links": [{"text": l.text, "href": l.href} for l in content.links],
-                "forms": [{"action": f.action, "method": f.method,
-                           "fields": [{"name": ff.name, "type": ff.type,
-                                       "value": ff.value, "placeholder": ff.placeholder}
-                                      for ff in f.fields]}
-                          for f in content.forms],
-                "meta": content.meta,
-            }
+            return self._content_to_dict(content)
 
         elif action == "check_challenge":
             challenge = self.detect_challenge()
@@ -246,17 +154,7 @@ class SessionServer:
 
         elif action == "extract_content":
             content = extract_page_content(self.driver)
-            return {
-                "url": content.url, "title": content.title,
-                "text": content.text,
-                "links": [{"text": l.text, "href": l.href} for l in content.links],
-                "forms": [{"action": f.action, "method": f.method,
-                           "fields": [{"name": ff.name, "type": ff.type,
-                                       "value": ff.value, "placeholder": ff.placeholder}
-                                      for ff in f.fields]}
-                          for f in content.forms],
-                "meta": content.meta,
-            }
+            return self._content_to_dict(content)
 
         elif action == "click":
             by = cmd.get("by", By.CSS_SELECTOR)
@@ -320,47 +218,18 @@ class SessionServer:
             return True
 
         elif action == "ping":
-            if agent_id and agent_id in self._agents:
-                agent = self._agents[agent_id]
-                return {
-                    "pong": True,
-                    "agent_id": agent_id,
-                    "color": agent["color"],
-                    "color_name": agent["color_name"],
-                }
             return "pong"
-
-        elif action == "list_agents":
-            agents = []
-            for aid, info in self._agents.items():
-                try:
-                    self.driver.switch_to.window(info["handle"])
-                    url = self.driver.current_url
-                except Exception:
-                    url = "(unknown)"
-                agents.append({
-                    "id": aid,
-                    "color": info["color"],
-                    "color_name": info["color_name"],
-                    "url": url,
-                })
-            # Switch back to requesting agent's tab
-            if agent_id and agent_id in self._agents:
-                self.driver.switch_to.window(self._agents[agent_id]["handle"])
-            return agents
 
         else:
             raise ValueError(f"Unknown command: {action}")
 
     @property
     def client_count(self):
-        return len(self._agents)
+        return self._client_count
 
     def _update_indicator(self):
-        """Toggle the browseagent attribute on the browser chrome root element.
-        Must hold self.lock (or be called right after releasing it when safe).
-        """
-        connected = len(self._agents) > 0
+        """Toggle the browseagent attribute on the browser chrome root element."""
+        connected = self._client_count > 0
         try:
             with self.driver.context(self.driver.CONTEXT_CHROME):
                 if connected:
@@ -374,113 +243,10 @@ class SessionServer:
         except Exception:
             pass
 
-    # ─── Per-Agent Tab Management ─────────────────────────────────────
-
-    def _assign_agent(self):
-        """Open a new tab and assign it to a new agent. Must hold self.lock.
-
-        Uses Firefox's gBrowser.addTab with inBackground:true so the new
-        tab opens silently without stealing the user's focus.
-        """
-        self._next_agent_id += 1
-        agent_id = self._next_agent_id
-        color_idx = (agent_id - 1) % len(_AGENT_COLORS)
-        color, color_name = _AGENT_COLORS[color_idx]
-
-        startpage = 'file://' + os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), 'startpage.html')
-
-        # Open a background tab via Firefox chrome API (no focus steal)
-        try:
-            with self.driver.context(self.driver.CONTEXT_CHROME):
-                self.driver.execute_script(
-                    "gBrowser.addTab(arguments[0], {"
-                    "  inBackground: true,"
-                    "  triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()"
-                    "});",
-                    startpage,
-                )
-        except Exception:
-            # Fallback: standard window.open (will flash briefly)
-            self.driver.switch_to.window(self._human_tab)
-            self.driver.execute_script("window.open(arguments[0], '_blank');", startpage)
-
-        # The new tab is the one not yet assigned to any agent or the human
-        known = {self._human_tab} | {a["handle"] for a in self._agents.values()}
-        new_handle = [h for h in self.driver.window_handles if h not in known][-1]
-
-        self._agents[agent_id] = {
-            "handle": new_handle,
-            "color": color,
-            "color_name": color_name,
-        }
-
-        # Ensure visual focus stays on the human tab
-        self._restore_human_focus()
-        return agent_id
-
-    def _restore_human_focus(self):
-        """Snap visual focus back to the human's tab via chrome API.
-
-        Uses gBrowser.selectedTab to change the visible tab without
-        affecting Selenium's internal browsing context.
-        """
-        try:
-            with self.driver.context(self.driver.CONTEXT_CHROME):
-                self.driver.execute_script(
-                    "gBrowser.selectTabAtIndex(0);"
-                )
-        except Exception:
-            try:
-                self.driver.switch_to.window(self._human_tab)
-            except Exception:
-                pass
-
-    def _release_agent(self, agent_id):
-        """Close the agent's tab and clean up. Must hold self.lock."""
-        if agent_id not in self._agents:
-            return
-        agent = self._agents.pop(agent_id)
-        try:
-            self.driver.switch_to.window(agent["handle"])
-            self.driver.close()
-        except Exception:
-            pass
-        self._restore_human_focus()
-
-    def _inject_agent_bar(self, agent_id):
-        """Inject a colored indicator bar at the top of the page content."""
-        if agent_id not in self._agents:
-            return
-        color = self._agents[agent_id]["color"]
-        color_name = self._agents[agent_id]["color_name"]
-        js = (
-            "(function(){"
-            "var e=document.getElementById('browse-agent-bar');"
-            "if(e)e.remove();"
-            "var b=document.createElement('div');"
-            "b.id='browse-agent-bar';"
-            "b.style.cssText='position:fixed;top:0;left:0;right:0;"
-            "height:3px;background:" + color + ";"
-            "z-index:2147483647;box-shadow:0 0 10px " + color + ";"
-            "pointer-events:none;';"
-            "b.setAttribute('data-agent','" + color_name + "');"
-            "if(document.body)document.body.prepend(b);"
-            "})();"
-        )
-        try:
-            self.driver.execute_script(js)
-        except Exception:
-            pass
-
-    # Commands after which we re-inject the agent's colored page bar.
-    _NAV_COMMANDS = {"navigate", "back", "forward", "refresh"}
-
     def _handle_client(self, conn, addr):
-        """Handle one client connection. Opens a dedicated tab for the agent."""
-        with self.lock:
-            agent_id = self._assign_agent()
-            self._update_indicator()
+        """Handle one client connection. Reads JSON lines, sends responses."""
+        self._client_count += 1
+        self._update_indicator()
         try:
             with conn:
                 buf = b""
@@ -490,7 +256,6 @@ class SessionServer:
                         if not data:
                             break
                         buf += data
-                        # Process complete lines
                         while b"\n" in buf:
                             line, buf = buf.split(b"\n", 1)
                             line = line.strip()
@@ -500,33 +265,23 @@ class SessionServer:
                                 cmd = json.loads(line)
                             except json.JSONDecodeError as e:
                                 resp = {"ok": False, "error": f"Bad JSON: {e}"}
-                                conn.sendall(json.dumps(resp).encode() + b"\n")
+                                conn.sendall(
+                                    json.dumps(resp).encode() + b"\n")
                                 continue
 
                             with self.lock:
                                 try:
-                                    # Switch to this agent's tab
-                                    if agent_id in self._agents:
-                                        self.driver.switch_to.window(
-                                            self._agents[agent_id]["handle"])
-                                    result = self.handle_command(cmd, agent_id=agent_id)
-                                    # Re-inject colored bar after navigation
-                                    if cmd.get("cmd") in self._NAV_COMMANDS:
-                                        self._inject_agent_bar(agent_id)
+                                    result = self.handle_command(cmd)
                                     resp = {"ok": True, "result": result}
                                 except Exception as e:
                                     resp = {"ok": False, "error": str(e)}
-                                finally:
-                                    # Snap visual focus back to human tab
-                                    self._restore_human_focus()
 
                             conn.sendall(json.dumps(resp).encode() + b"\n")
                     except (ConnectionResetError, BrokenPipeError):
                         break
         finally:
-            with self.lock:
-                self._release_agent(agent_id)
-                self._update_indicator()
+            self._client_count -= 1
+            self._update_indicator()
 
     def serve(self):
         """Start the command server. Blocks until shutdown."""
@@ -556,7 +311,7 @@ class SessionServer:
         self._running = False
 
     def start_status_server(self):
-        """Start a tiny HTTP server returning agent status as JSON."""
+        """Start a tiny HTTP server for the indicator extension to poll."""
         from http.server import HTTPServer, BaseHTTPRequestHandler
         session_server = self
 
@@ -566,20 +321,12 @@ class SessionServer:
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
-                agent_list = []
-                for aid, info in session_server._agents.items():
-                    agent_list.append({
-                        "id": aid,
-                        "color": info["color"],
-                        "color_name": info["color_name"],
-                    })
                 self.wfile.write(json.dumps({
-                    "agents": len(session_server._agents),
-                    "agent_list": agent_list,
+                    "agents": session_server.client_count
                 }).encode())
 
             def log_message(self, *args):
-                pass  # suppress request logs
+                pass
 
         httpd = HTTPServer(("127.0.0.1", self.port + 1), Handler)
         t = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -588,7 +335,6 @@ class SessionServer:
 
 
 # ─── Client ──────────────────────────────────────────────────────────────
-# Connects to a running SessionServer over TCP.
 
 class SessionClient:
     """Client that sends commands to a running session server."""
@@ -605,9 +351,8 @@ class SessionClient:
         payload = json.dumps(cmd).encode() + b"\n"
         self.sock.sendall(payload)
 
-        # Read response
         while b"\n" not in self._buf:
-            data = self.sock.recv(1048576)  # 1MB chunks for screenshots
+            data = self.sock.recv(1048576)
             if not data:
                 raise ConnectionError("Session server closed connection")
             self._buf += data
@@ -633,7 +378,6 @@ def get_session_info():
         return None
     with open(SESSION_FILE) as f:
         info = json.load(f)
-    # Check if process is still alive
     try:
         os.kill(info["pid"], 0)
     except (OSError, ProcessLookupError):
@@ -650,100 +394,21 @@ def connect_to_session():
             "No running session found. Start one with: python -m browse.session"
         )
     client = SessionClient(port=info["port"])
-    # Verify connection
     client.send({"cmd": "ping"})
     return client
 
 
 # ─── Launch ───────────────────────────────────────────────────────────────
 
-def launch_session(tbb_path=None, geckodriver_path=None,
+def launch_session(firefox_path=None, geckodriver_path=None,
                    headless=False, profile_path=None):
     """Launch the browser and return the Selenium driver."""
-    conf = _read_conf()
-    tbb_path = tbb_path or conf.get("TBB_PATH") or os.environ.get("TBB_PATH")
-    geckodriver_path = (geckodriver_path or conf.get("GECKODRIVER_PATH")
-                        or os.environ.get("GECKODRIVER_PATH"))
-
-    if not tbb_path:
-        raise ValueError("TBB_PATH not found. Run setup.sh first.")
-
-    # Layer 1a: Binary patch libxul.so to remove navigator.webdriver
-    if not is_patched(tbb_path):
-        print("  Applying stealth patch to libxul.so...")
-        patch_libxul(tbb_path)
-        print("  Patched — navigator.webdriver will be undefined.")
-
-    # Layer 1b: Patch omni.ja to replace automation indicator with agent glow
-    if not is_omni_patched(tbb_path):
-        print("  Patching omni.ja — replacing automation indicator...")
-        patch_omni(tbb_path)
-        print("  Patched — address bar will glow green when agents connect.")
-
-    _setup_env(tbb_path)
-
-    fx_binary = os.path.join(tbb_path, cm.DEFAULT_TBB_FX_BINARY_PATH)
-    default_profile = profile_path or os.path.join(
-        tbb_path, cm.DEFAULT_TBB_PROFILE_PATH)
-
-    options = Options()
-    options.binary = fx_binary
-    options.add_argument('--class')
-    options.add_argument('"Tor Browser"')
-    options.add_argument('-remote-allow-system-access')
-    if headless:
-        options.add_argument('-headless')
-
-    pre_prefs = {
-        'network.proxy.type': 0,
-        'network.proxy.socks': '',
-        'network.proxy.socks_port': 0,
-        'network.proxy.socks_remote_dns': False,
-        'network.dns.disabled': False,
-        'extensions.torlauncher.start_tor': False,
-        'extensions.torlauncher.prompt_at_startup': False,
-        'extensions.torlauncher.quickstart': False,
-        'privacy.resistFingerprinting': True,
-        'privacy.resistFingerprinting.letterboxing': True,
-        'javascript.enabled': True,
-        'media.peerconnection.enabled': False,
-        'browser.startup.page': 1,
-        'browser.startup.homepage': 'file://' + os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), 'startpage.html'),
-        'app.update.enabled': False,
-        'extensions.torbutton.versioncheck_enabled': False,
-        'extensions.torbutton.prompted_language': True,
-        'intl.language_notification.shown': True,
-        'torbrowser.settings.quickstart.enabled': True,
-        'xpinstall.signatures.required': False,
-        'xpinstall.whitelist.required': False,
-        'toolkit.legacyUserProfileCustomizations.stylesheets': True,
-        'browse.agent.connected': False,
-        'browser.chrome.disableRemoteControlCueForTests': True,
-    }
-    for k, v in pre_prefs.items():
-        options.set_preference(k, v)
-
-    if profile_path:
-        options.add_argument("-profile")
-        options.add_argument(profile_path)
-    else:
-        options.profile = default_profile
-
-    service = Service(executable_path=geckodriver_path)
-    driver = webdriver.Firefox(service=service, options=options)
-    time.sleep(1)
-
-    _apply_direct_prefs(driver)
-
-    # Layer 2: Install stealth WebExtension (defense-in-depth)
-    try:
-        xpi_path = build_stealth_extension()
-        driver.install_addon(xpi_path, temporary=True)
-    except Exception as e:
-        print(f"  Warning: stealth extension failed to install: {e}")
-
-    return driver
+    return launch_firefox(
+        firefox_path=firefox_path,
+        geckodriver_path=geckodriver_path,
+        headless=headless,
+        profile_path=profile_path,
+    )
 
 
 def main():
@@ -755,7 +420,7 @@ def main():
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT,
                         help=f"Command server port (default: {DEFAULT_PORT})")
-    parser.add_argument("--tbb-path", help="Path to Tor Browser Bundle")
+    parser.add_argument("--firefox-path", help="Path to Firefox installation")
     parser.add_argument("--profile", help="Path to a persistent profile dir")
     args = parser.parse_args()
 
@@ -766,18 +431,16 @@ def main():
 
     print("Launching persistent browser session...")
     driver = launch_session(
-        tbb_path=args.tbb_path,
+        firefox_path=args.firefox_path,
         headless=args.headless,
         profile_path=args.profile,
     )
 
     server = SessionServer(driver, port=args.port)
 
-    # Start HTTP status endpoint for the indicator extension
     status_port = args.port + 1
     server.start_status_server()
 
-    # Install the agent indicator extension
     try:
         from .stealth import build_indicator_extension
         xpi_path = build_indicator_extension(status_port)
@@ -793,9 +456,8 @@ def main():
     with open(SESSION_FILE, "w") as f:
         json.dump(session_info, f, indent=2)
 
-    print(f"  Browser is running (your tab is private).")
+    print(f"  Browser is running.")
     print(f"  Command server on 127.0.0.1:{args.port}")
-    print(f"  Each agent gets its own color-coded tab.")
     print()
     print("  Connect with:  AgentBrowser.connect()")
     print("  Shut down with: Ctrl+C")
@@ -815,15 +477,11 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    # Watchdog: detect when the browser window is closed by the user
     def _watch_browser():
         while True:
             time.sleep(2)
             try:
-                # window_handles doesn't switch tabs — safe for multi-tab
-                handles = driver.window_handles
-                if server._human_tab not in handles:
-                    raise Exception("Human tab closed")
+                driver.current_url
             except Exception:
                 print("\nBrowser closed. Shutting down...")
                 server.shutdown()
@@ -834,7 +492,6 @@ def main():
     watcher = threading.Thread(target=_watch_browser, daemon=True)
     watcher.start()
 
-    # Run command server (blocks)
     try:
         server.serve()
     finally:

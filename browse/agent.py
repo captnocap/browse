@@ -8,29 +8,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
     TimeoutException, NoSuchElementException, WebDriverException)
 
-from .tbselenium.tbdriver import TorBrowserDriver
-from .tbselenium import common as cm
+from .firefox import launch_firefox, find_firefox_path
 from .content import extract_page_content, PageContent, Link, Form, FormField
-
-
-def _find_tbb_path():
-    """Try to locate TBB_PATH from browse.conf or environment."""
-    env_path = os.environ.get("TBB_PATH")
-    if env_path and os.path.isdir(env_path):
-        return env_path
-
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    conf_path = os.path.join(here, "browse.conf")
-    if os.path.exists(conf_path):
-        with open(conf_path) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("TBB_PATH="):
-                    path = line.split("=", 1)[1].strip()
-                    if os.path.isdir(path):
-                        return path
-
-    return None
 
 
 def _dict_to_page_content(d):
@@ -51,7 +30,7 @@ def _dict_to_page_content(d):
 
 
 class AgentBrowser:
-    """AI agent browser built on Tor Browser's engine.
+    """AI agent browser built on Firefox ESR with RFP hardening.
 
     Two modes of operation:
 
@@ -66,26 +45,18 @@ class AgentBrowser:
         agent.detach()  # browser stays open
     """
 
-    def __init__(self, tbb_path=None, proxy=None, headless=False,
+    def __init__(self, firefox_path=None, proxy=None, headless=False,
                  profile_path=None, pref_dict=None):
         """Initialize the agent browser (quick mode — spawns a new browser).
 
         Args:
-            tbb_path: Path to Tor Browser Bundle directory. If None, reads
-                      from TBB_PATH env var or browse.conf.
+            firefox_path: Path to Firefox installation directory. If None,
+                          reads from FIREFOX_PATH env var or browse.conf.
             proxy: Optional proxy URL ("socks5://host:port", "http://host:port").
             headless: Run headless (prefer XVFB instead for stealth).
             profile_path: Custom profile dir for persistent sessions.
             pref_dict: Additional Firefox preferences.
         """
-        if tbb_path is None:
-            tbb_path = _find_tbb_path()
-        if not tbb_path:
-            raise ValueError(
-                "tbb_path not provided and could not be found. "
-                "Run setup.sh or set the TBB_PATH environment variable."
-            )
-        self.tbb_path = tbb_path
         self._client = None  # only set in session mode
         self._owns_browser = True
 
@@ -95,18 +66,12 @@ class AgentBrowser:
         if pref_dict:
             prefs.update(pref_dict)
 
-        driver_kwargs = dict(
-            tbb_path=tbb_path,
-            tor_cfg=cm.USE_DIRECT,
-            pref_dict=prefs,
+        self._driver = launch_firefox(
+            firefox_path=firefox_path,
             headless=headless,
+            profile_path=profile_path,
+            pref_dict=prefs,
         )
-
-        if profile_path:
-            driver_kwargs["tbb_profile_path"] = profile_path
-            driver_kwargs["use_custom_profile"] = True
-
-        self._driver = TorBrowserDriver(**driver_kwargs)
 
     @classmethod
     def connect(cls):
@@ -123,7 +88,6 @@ class AgentBrowser:
         instance._driver = None
         instance._client = connect_to_session()
         instance._owns_browser = False
-        instance.tbb_path = None
         return instance
 
     @property

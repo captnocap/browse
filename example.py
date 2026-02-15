@@ -4,36 +4,12 @@
 import os
 import sys
 
-# Read config from setup.sh output
-conf = {}
-conf_path = os.path.join(os.path.dirname(__file__), "browse.conf")
-if os.path.exists(conf_path):
-    with open(conf_path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                conf[k.strip()] = v.strip()
-
-TBB_PATH = conf.get("TBB_PATH") or os.environ.get("TBB_PATH")
-GECKODRIVER = conf.get("GECKODRIVER_PATH") or os.environ.get("GECKODRIVER_PATH")
-
-if not TBB_PATH:
-    print("Error: TBB_PATH not set. Run setup.sh first or set the environment variable.")
-    sys.exit(1)
-
-# Put geckodriver on PATH if we know where it is
-if GECKODRIVER and os.path.isfile(GECKODRIVER):
-    geckodriver_dir = os.path.dirname(GECKODRIVER)
-    os.environ["PATH"] = geckodriver_dir + ":" + os.environ.get("PATH", "")
-
 from browse import AgentBrowser
 
-print(f"Launching agent browser (Tor Browser engine, direct connection)...")
-print(f"  TBB path: {TBB_PATH}")
+print("Launching agent browser (Firefox ESR + RFP)...")
 print()
 
-with AgentBrowser(TBB_PATH) as browser:
+with AgentBrowser() as browser:
     # Visit the bot detection test page
     print("Navigating to bot.sannysoft.com...")
     content = browser.navigate("https://bot.sannysoft.com")
