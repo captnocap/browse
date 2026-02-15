@@ -50,6 +50,9 @@ class SessionServer:
         self.lock = threading.Lock()
         self._running = False
         self._client_count = 0
+        self._history = []
+        self._last_url = None
+        self._agent_navigating = False
 
     CHALLENGE_URL_PATTERNS = [
         ("/sorry/", "google_captcha"),
@@ -129,18 +132,60 @@ class SessionServer:
             "meta": content.meta,
         }
 
+    def _append_history(self, source, url, title):
+        """Append a history entry, capped at 200."""
+        entry = {
+            "source": source,
+            "url": url,
+            "title": title or "",
+            "ts": time.strftime("%H:%M:%S"),
+        }
+        self._history.append(entry)
+        if len(self._history) > 200:
+            self._history = self._history[-200:]
+
+    def _watch_url(self):
+        """Poll for human-initiated URL changes in a daemon thread."""
+        while self._running:
+            time.sleep(1.5)
+            try:
+                url = self.driver.current_url
+            except Exception:
+                continue
+            if url == self._last_url:
+                continue
+            if self._agent_navigating:
+                self._last_url = url
+                continue
+            if url.startswith("about:") or url.startswith("file://"):
+                self._last_url = url
+                continue
+            try:
+                title = self.driver.title
+            except Exception:
+                title = ""
+            self._last_url = url
+            self._append_history("human", url, title)
+
     def handle_command(self, cmd):
         """Execute a command on the browser. Returns a JSON-serializable result."""
         action = cmd.get("cmd")
 
         if action == "navigate":
-            self.driver.set_page_load_timeout(cmd.get("timeout", 30))
-            self.driver.get(cmd["url"])
-            challenge = self.detect_challenge()
-            if challenge:
-                return {"challenge": challenge, "url": self.driver.current_url}
-            content = self._wait_for_stable_content()
-            return self._content_to_dict(content)
+            self._agent_navigating = True
+            try:
+                self.driver.set_page_load_timeout(cmd.get("timeout", 30))
+                self.driver.get(cmd["url"])
+                challenge = self.detect_challenge()
+                if challenge:
+                    self._last_url = self.driver.current_url
+                    return {"challenge": challenge, "url": self.driver.current_url}
+                content = self._wait_for_stable_content()
+                self._append_history("agent", content.url, content.title)
+                self._last_url = self.driver.current_url
+                return self._content_to_dict(content)
+            finally:
+                self._agent_navigating = False
 
         elif action == "check_challenge":
             challenge = self.detect_challenge()
@@ -206,12 +251,32 @@ class SessionServer:
             return self.driver.page_source
 
         elif action == "back":
-            self.driver.back()
-            return True
+            self._agent_navigating = True
+            try:
+                self.driver.back()
+                time.sleep(0.3)
+                url = self.driver.current_url
+                title = self.driver.title
+                if not url.startswith("about:") and not url.startswith("file://"):
+                    self._append_history("agent", url, title)
+                self._last_url = url
+                return True
+            finally:
+                self._agent_navigating = False
 
         elif action == "forward":
-            self.driver.forward()
-            return True
+            self._agent_navigating = True
+            try:
+                self.driver.forward()
+                time.sleep(0.3)
+                url = self.driver.current_url
+                title = self.driver.title
+                if not url.startswith("about:") and not url.startswith("file://"):
+                    self._append_history("agent", url, title)
+                self._last_url = url
+                return True
+            finally:
+                self._agent_navigating = False
 
         elif action == "refresh":
             self.driver.refresh()
@@ -322,7 +387,8 @@ class SessionServer:
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps({
-                    "agents": session_server.client_count
+                    "agents": session_server.client_count,
+                    "history": session_server._history,
                 }).encode())
 
             def log_message(self, *args):
@@ -401,13 +467,14 @@ def connect_to_session():
 # ─── Launch ───────────────────────────────────────────────────────────────
 
 def launch_session(firefox_path=None, geckodriver_path=None,
-                   headless=False, profile_path=None):
+                   headless=False, profile_path=None, homepage=None):
     """Launch the browser and return the Selenium driver."""
     return launch_firefox(
         firefox_path=firefox_path,
         geckodriver_path=geckodriver_path,
         headless=headless,
         profile_path=profile_path,
+        homepage=homepage,
     )
 
 
@@ -429,17 +496,25 @@ def main():
         print(f"Session already running (pid {existing['pid']}, port {existing['port']}).")
         sys.exit(1)
 
+    startpage = os.path.join(os.path.dirname(os.path.abspath(__file__)), "startpage.html")
+    homepage_url = f"file://{startpage}"
+
     print("Launching persistent browser session...")
     driver = launch_session(
         firefox_path=args.firefox_path,
         headless=args.headless,
         profile_path=args.profile,
+        homepage=homepage_url,
     )
 
     server = SessionServer(driver, port=args.port)
 
     status_port = args.port + 1
     server.start_status_server()
+
+    server._running = True
+    url_watcher = threading.Thread(target=server._watch_url, daemon=True)
+    url_watcher.start()
 
     try:
         from .stealth import build_indicator_extension

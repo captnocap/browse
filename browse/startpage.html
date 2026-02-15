@@ -10,44 +10,42 @@
     background: #0d1117;
     color: #c9d1d9;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    display: flex;
-    justify-content: center;
-    align-items: center;
     min-height: 100vh;
-    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 2.5rem 1.5rem 1.5rem;
   }
 
-  .container {
+  /* Header */
+  .header {
     text-align: center;
-    max-width: 600px;
-    padding: 2rem;
+    margin-bottom: 2rem;
   }
 
   h1 {
-    font-size: 3rem;
+    font-size: 2.5rem;
     font-weight: 300;
     letter-spacing: 0.15em;
-    margin-bottom: 0.5rem;
     color: #e6edf3;
+    margin-bottom: 0.3rem;
   }
 
   .subtitle {
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     color: #8b949e;
-    margin-bottom: 3rem;
+    margin-bottom: 1.5rem;
   }
 
-  /* Status indicator */
   .status {
     display: inline-flex;
     align-items: center;
-    gap: 0.75rem;
-    padding: 0.75rem 1.5rem;
+    gap: 0.6rem;
+    padding: 0.5rem 1.2rem;
     border-radius: 999px;
-    font-size: 0.95rem;
+    font-size: 0.85rem;
     font-weight: 500;
     transition: all 0.5s ease;
-    margin-bottom: 2rem;
   }
 
   .status.idle {
@@ -64,15 +62,13 @@
   }
 
   .dot {
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     transition: all 0.5s ease;
   }
 
-  .idle .dot {
-    background: #484f58;
-  }
+  .idle .dot { background: #484f58; }
 
   .active .dot {
     background: #00ff88;
@@ -85,255 +81,234 @@
     50% { box-shadow: 0 0 16px #00ffaa; }
   }
 
-  /* Agent list */
-  .agents {
-    text-align: left;
+  /* History panel */
+  .history-panel {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    width: 100%;
+    max-width: 900px;
+    flex: 1;
+    min-height: 0;
+    margin-bottom: 1.5rem;
+  }
+
+  .history-col {
     background: #161b22;
     border: 1px solid #30363d;
     border-radius: 12px;
-    padding: 1.5rem;
-    margin-bottom: 2rem;
-    display: none;
+    display: flex;
+    flex-direction: column;
+    min-height: 200px;
+    max-height: calc(100vh - 280px);
   }
 
-  .agents.visible { display: block; }
+  .history-col.agent { border-top: 2px solid #00ff88; }
+  .history-col.human { border-top: 2px solid #58a6ff; }
 
-  .agents h2 {
-    font-size: 0.8rem;
+  .col-header {
+    padding: 1rem 1.25rem 0.75rem;
+    font-size: 0.75rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.1em;
-    color: #8b949e;
-    margin-bottom: 1rem;
-  }
-
-  .agent-row {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    padding: 0.5rem 0;
-    border-bottom: 1px solid #21262d;
-  }
-
-  .agent-row:last-child { border-bottom: none; }
-
-  .agent-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
+    gap: 0.5rem;
     flex-shrink: 0;
   }
 
-  .agent-id {
-    font-family: "SF Mono", "Fira Code", monospace;
-    font-size: 0.85rem;
-    color: #e6edf3;
-    min-width: 80px;
+  .agent .col-header { color: #00ff88; }
+  .human .col-header { color: #58a6ff; }
+
+  .col-header .col-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
   }
 
-  .agent-color {
-    font-size: 0.8rem;
-    color: #8b949e;
-  }
+  .agent .col-dot { background: #00ff88; }
+  .human .col-dot { background: #58a6ff; }
 
-  /* Quick reference */
-  .commands {
-    text-align: left;
-    background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 12px;
-    padding: 1.5rem;
-    margin-bottom: 2rem;
-  }
-
-  .commands h2 {
-    font-size: 0.8rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: #8b949e;
-    margin-bottom: 1rem;
-  }
-
-  .cmd-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    padding: 0.4rem 0;
-    border-bottom: 1px solid #21262d;
-  }
-
-  .cmd-row:last-child { border-bottom: none; }
-
-  .cmd {
-    font-family: "SF Mono", "Fira Code", monospace;
-    font-size: 0.85rem;
-    color: #e6edf3;
-  }
-
-  .cmd-desc {
-    font-size: 0.8rem;
-    color: #8b949e;
-  }
-
-  /* Agent log */
-  .log {
-    text-align: left;
-    background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 12px;
-    padding: 1.5rem;
-    max-height: 200px;
+  .col-entries {
+    flex: 1;
     overflow-y: auto;
+    padding: 0 1.25rem 1rem;
   }
 
-  .log h2 {
+  .col-entries::-webkit-scrollbar { width: 4px; }
+  .col-entries::-webkit-scrollbar-track { background: transparent; }
+  .col-entries::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+
+  .entry {
+    padding: 0.6rem 0;
+    border-bottom: 1px solid #21262d;
+    animation: fade-in 0.3s ease;
+  }
+
+  .entry:last-child { border-bottom: none; }
+
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .entry-top {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+  }
+
+  .entry-ts {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.7rem;
+    color: #484f58;
+    flex-shrink: 0;
+  }
+
+  .entry-title {
     font-size: 0.8rem;
+    color: #e6edf3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .entry-url {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.7rem;
+    color: #484f58;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 0.15rem;
+  }
+
+  .empty-state {
+    color: #484f58;
+    font-style: italic;
+    font-size: 0.8rem;
+    padding-top: 2rem;
+    text-align: center;
+  }
+
+  /* Quick reference — condensed */
+  .commands {
+    width: 100%;
+    max-width: 900px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 0.75rem 1.25rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.5rem;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .commands-label {
+    font-size: 0.65rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.1em;
-    color: #8b949e;
-    margin-bottom: 1rem;
+    color: #484f58;
+    margin-right: 0.25rem;
   }
 
-  .log-entry {
+  .cmd-item {
+    font-size: 0.75rem;
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+  }
+
+  .cmd-item .cmd {
     font-family: "SF Mono", "Fira Code", monospace;
-    font-size: 0.8rem;
-    padding: 0.25rem 0;
-    color: #8b949e;
+    color: #c9d1d9;
   }
 
-  .log-entry .time { color: #484f58; }
-  .log-entry.connect { color: #00ff88; }
-  .log-entry.disconnect { color: #f85149; }
-  .log-empty { color: #484f58; font-style: italic; font-size: 0.8rem; }
+  .cmd-item .cmd-desc {
+    color: #484f58;
+    font-size: 0.7rem;
+  }
 </style>
 </head>
 <body>
 
-<div class="container">
+<div class="header">
   <h1>browse</h1>
   <p class="subtitle">anti-fingerprint browser for AI agents</p>
-
   <div class="status idle" id="status">
     <span class="dot"></span>
     <span id="status-text">No agents connected</span>
   </div>
+</div>
 
-  <div class="agents" id="agents">
-    <h2>Active Agents</h2>
-    <div id="agent-list"></div>
-  </div>
-
-  <div class="commands">
-    <h2>Quick Reference</h2>
-    <div class="cmd-row">
-      <span class="cmd">browse</span>
-      <span class="cmd-desc">launch browser</span>
-    </div>
-    <div class="cmd-row">
-      <span class="cmd">browse cookies firefox</span>
-      <span class="cmd-desc">import cookies</span>
-    </div>
-    <div class="cmd-row">
-      <span class="cmd">browse block &lt;domain&gt;</span>
-      <span class="cmd-desc">block a site</span>
-    </div>
-    <div class="cmd-row">
-      <span class="cmd">browse block --preset malicious</span>
-      <span class="cmd-desc">block typosquats</span>
-    </div>
-    <div class="cmd-row">
-      <span class="cmd">browse blocklist</span>
-      <span class="cmd-desc">show blocked sites</span>
+<div class="history-panel">
+  <div class="history-col agent">
+    <div class="col-header"><span class="col-dot"></span> Agent History</div>
+    <div class="col-entries" id="agent-entries">
+      <div class="empty-state" id="agent-empty">No agent activity yet</div>
     </div>
   </div>
-
-  <div class="log" id="log">
-    <h2>Agent Activity</h2>
-    <div class="log-empty" id="log-empty">Waiting for connections...</div>
+  <div class="history-col human">
+    <div class="col-header"><span class="col-dot"></span> Human History</div>
+    <div class="col-entries" id="human-entries">
+      <div class="empty-state" id="human-empty">No browsing yet</div>
+    </div>
   </div>
+</div>
+
+<div class="commands">
+  <span class="commands-label">Quick ref</span>
+  <span class="cmd-item"><span class="cmd">browse</span><span class="cmd-desc">launch</span></span>
+  <span class="cmd-item"><span class="cmd">browse cookies firefox</span><span class="cmd-desc">import</span></span>
+  <span class="cmd-item"><span class="cmd">browse block &lt;domain&gt;</span><span class="cmd-desc">block site</span></span>
+  <span class="cmd-item"><span class="cmd">browse block --preset malicious</span><span class="cmd-desc">typosquats</span></span>
+  <span class="cmd-item"><span class="cmd">browse blocklist</span><span class="cmd-desc">list</span></span>
 </div>
 
 <script>
 (function() {
-  const STATUS_PORT = location.port ? parseInt(location.port) + 1 : 7332;
-  const STATUS_URL = "http://127.0.0.1:" + STATUS_PORT + "/";
-  const POLL_MS = 1000;
+  var STATUS_PORT = location.port ? parseInt(location.port) + 1 : 7332;
+  var STATUS_URL = "http://127.0.0.1:" + STATUS_PORT + "/";
+  var POLL_MS = 1500;
 
-  const statusEl = document.getElementById("status");
-  const statusText = document.getElementById("status-text");
-  const agentsEl = document.getElementById("agents");
-  const agentListEl = document.getElementById("agent-list");
-  const logEl = document.getElementById("log");
-  const logEmpty = document.getElementById("log-empty");
+  var statusEl = document.getElementById("status");
+  var statusText = document.getElementById("status-text");
+  var agentEntries = document.getElementById("agent-entries");
+  var humanEntries = document.getElementById("human-entries");
+  var agentEmpty = document.getElementById("agent-empty");
+  var humanEmpty = document.getElementById("human-empty");
 
-  let lastCount = 0;
-  let lastAgentIds = [];
+  var knownCount = 0;  // how many history entries we've already rendered
 
-  function timestamp() {
-    return new Date().toLocaleTimeString("en-US", { hour12: false });
+  function truncate(str, max) {
+    if (!str) return "";
+    return str.length > max ? str.substring(0, max) + "\u2026" : str;
   }
 
-  function addLog(msg, type, color) {
-    if (logEmpty) logEmpty.remove();
-    const entry = document.createElement("div");
-    entry.className = "log-entry " + type;
-    if (color) entry.style.color = color;
-    entry.innerHTML = '<span class="time">' + timestamp() + "</span>  " + msg;
-    logEl.appendChild(entry);
-    logEl.scrollTop = logEl.scrollHeight;
-  }
-
-  function renderAgents(agentList) {
-    if (!agentList || agentList.length === 0) {
-      agentsEl.classList.remove("visible");
-      return;
-    }
-    agentsEl.classList.add("visible");
-    agentListEl.innerHTML = "";
-    for (var i = 0; i < agentList.length; i++) {
-      var a = agentList[i];
-      var row = document.createElement("div");
-      row.className = "agent-row";
-      row.innerHTML =
-        '<span class="agent-dot" style="background:' + a.color +
-        ';box-shadow:0 0 6px ' + a.color + ';"></span>' +
-        '<span class="agent-id">Agent ' + a.id + '</span>' +
-        '<span class="agent-color">' + a.color_name + ' tab</span>';
-      agentListEl.appendChild(row);
-    }
+  function renderEntry(item) {
+    var div = document.createElement("div");
+    div.className = "entry";
+    div.innerHTML =
+      '<div class="entry-top">' +
+        '<span class="entry-ts">' + item.ts + '</span>' +
+        '<span class="entry-title">' + truncate(item.title || item.url, 50) + '</span>' +
+      '</div>' +
+      '<div class="entry-url">' + truncate(item.url, 70) + '</div>';
+    return div;
   }
 
   async function poll() {
     try {
-      const resp = await fetch(STATUS_URL);
-      const data = await resp.json();
-      const count = data.agents || 0;
-      const agentList = data.agent_list || [];
+      var resp = await fetch(STATUS_URL);
+      var data = await resp.json();
+      var count = data.agents || 0;
+      var history = data.history || [];
 
-      // Detect new/disconnected agents by ID
-      var currentIds = agentList.map(function(a) { return a.id; });
-
-      if (count !== lastCount) {
-        // Find which agents are new
-        var newAgents = agentList.filter(function(a) {
-          return lastAgentIds.indexOf(a.id) === -1;
-        });
-        var goneIds = lastAgentIds.filter(function(id) {
-          return currentIds.indexOf(id) === -1;
-        });
-
-        for (var i = 0; i < newAgents.length; i++) {
-          addLog("Agent " + newAgents[i].id + " connected (" + newAgents[i].color_name + " tab)", "connect", newAgents[i].color);
-        }
-        for (var i = 0; i < goneIds.length; i++) {
-          addLog("Agent " + goneIds[i] + " disconnected", "disconnect");
-        }
-      }
-
-      lastAgentIds = currentIds;
-
+      // Update status pill
       if (count > 0) {
         statusEl.className = "status active";
         statusText.textContent = count + " agent" + (count > 1 ? "s" : "") + " connected";
@@ -342,8 +317,21 @@
         statusText.textContent = "No agents connected";
       }
 
-      renderAgents(agentList);
-      lastCount = count;
+      // Render new entries only
+      if (history.length > knownCount) {
+        for (var i = knownCount; i < history.length; i++) {
+          var item = history[i];
+          var el = renderEntry(item);
+          if (item.source === "agent") {
+            if (agentEmpty) { agentEmpty.remove(); agentEmpty = null; }
+            agentEntries.insertBefore(el, agentEntries.firstChild);
+          } else {
+            if (humanEmpty) { humanEmpty.remove(); humanEmpty = null; }
+            humanEntries.insertBefore(el, humanEntries.firstChild);
+          }
+        }
+        knownCount = history.length;
+      }
     } catch (e) {
       statusEl.className = "status idle";
       statusText.textContent = "Status unavailable";
