@@ -451,6 +451,10 @@ def browse_search(query: str, engine: str = "google", browser_id: str = "") -> s
 def browse_click(selector: str, browser_id: str = "") -> str:
     """Click an element on the page. Waits for the page to settle, then returns updated content — no need to call browse_extract after this.
 
+    If the click fails (element not found, not clickable, etc.), do NOT retry the same click.
+    Instead, look at the links returned from the previous page extraction — if the target
+    page URL is in those links, use browse_navigate to go there directly.
+
     Args:
         selector: CSS selector for the element to click.
         browser_id: Which browser to use. Leave empty for the most recent one.
