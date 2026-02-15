@@ -570,12 +570,39 @@ def main():
                         help=f"Command server port (default: {DEFAULT_PORT})")
     parser.add_argument("--firefox-path", help="Path to Firefox installation")
     parser.add_argument("--profile", help="Path to a persistent profile dir")
+    parser.add_argument("--disposable", action="store_true",
+                        help="Use a temporary profile (discarded on exit)")
     args = parser.parse_args()
 
     existing = get_session_info()
     if existing:
         print(f"Session already running (pid {existing['pid']}, port {existing['port']}).")
         sys.exit(1)
+
+    # Resolve profile path
+    if args.disposable:
+        profile_path = None
+    elif args.profile:
+        profile_path = os.path.expanduser(args.profile)
+        os.makedirs(profile_path, exist_ok=True)
+    else:
+        from .firefox import _read_conf
+        conf = _read_conf()
+        mode = conf.get("PROFILE_MODE", "persistent").lower()
+        if mode == "disposable":
+            profile_path = None
+        else:
+            profile_path = conf.get(
+                "PROFILE_PATH",
+                os.path.expanduser("~/.config/browse/profile"),
+            )
+            profile_path = os.path.expanduser(profile_path)
+            os.makedirs(profile_path, exist_ok=True)
+
+    if profile_path:
+        print(f"  Profile: {profile_path}")
+    else:
+        print("  Profile: disposable (temporary)")
 
     startpage = os.path.join(os.path.dirname(os.path.abspath(__file__)), "startpage.html")
     homepage_url = f"file://{startpage}"
@@ -584,7 +611,7 @@ def main():
     driver = launch_session(
         firefox_path=args.firefox_path,
         headless=args.headless,
-        profile_path=args.profile,
+        profile_path=profile_path,
         homepage=homepage_url,
     )
 

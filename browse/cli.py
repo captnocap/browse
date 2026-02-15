@@ -1,6 +1,7 @@
 """Top-level CLI dispatcher for the browse command.
 
     browse                          — launch a persistent browser session
+    browse --disposable             — launch with a temporary profile
     browse block <domain>           — block a domain from agent navigation
     browse block --preset <name>    — block a curated set of domains
     browse unblock <domain>         — unblock a domain
@@ -8,6 +9,11 @@
     browse cookies <source>         — import cookies from another browser
     browse scripts                  — list available navigation scripts
     browse run <name> [--key=val]   — execute a navigation script
+    browse profile                  — show/manage profile configuration
+    browse profile new              — create a fresh persistent profile
+    browse profile clone            — clone a Firefox system profile
+    browse profile use <path>       — use a system profile directly
+    browse profile disposable       — set default to disposable profiles
 """
 
 import os
@@ -99,6 +105,189 @@ def _normalize_domain(domain):
         domain = domain.split("://", 1)[1]
     domain = domain.split("/")[0]
     return domain
+
+
+def _find_firefox_profiles():
+    """Discover Firefox profiles from ~/.mozilla/firefox/profiles.ini."""
+    import configparser
+    profiles_ini = os.path.expanduser("~/.mozilla/firefox/profiles.ini")
+    if not os.path.exists(profiles_ini):
+        return []
+    cp = configparser.ConfigParser()
+    cp.read(profiles_ini)
+    profiles = []
+    for section in cp.sections():
+        if not section.startswith("Profile"):
+            continue
+        name = cp.get(section, "Name", fallback=None)
+        path = cp.get(section, "Path", fallback=None)
+        is_relative = cp.getint(section, "IsRelative", fallback=1)
+        if not path:
+            continue
+        if is_relative:
+            full_path = os.path.expanduser(f"~/.mozilla/firefox/{path}")
+        else:
+            full_path = path
+        if os.path.isdir(full_path):
+            default = cp.getboolean(section, "Default", fallback=False)
+            profiles.append({"name": name, "path": full_path, "default": default})
+    return profiles
+
+
+def _handle_profile(args):
+    """Handle the browse profile subcommand."""
+    import shutil
+
+    browse_profile = os.path.expanduser("~/.config/browse/profile")
+
+    if not args:
+        # Show current profile config
+        conf = {}
+        if os.path.exists(CONF_PATH):
+            with open(CONF_PATH) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        conf[k.strip()] = v.strip()
+
+        mode = conf.get("PROFILE_MODE", "persistent")
+        path = conf.get("PROFILE_PATH", browse_profile)
+        print(f"  Mode: {mode}")
+        print(f"  Path: {path}")
+        exists = os.path.isdir(os.path.expanduser(path))
+        print(f"  Exists: {'yes' if exists else 'no'}")
+        print()
+        print("  Commands:")
+        print("    browse profile new           Create a fresh persistent profile")
+        print("    browse profile clone          Clone a Firefox system profile")
+        print("    browse profile use <path>     Use a system profile directly (lock warning)")
+        print("    browse profile disposable     Set default to disposable (temp) profiles")
+        return
+
+    subcmd = args[0]
+
+    if subcmd == "new":
+        if os.path.isdir(browse_profile):
+            confirm = input(f"  Profile already exists at {browse_profile}. Overwrite? [y/N] ").strip().lower()
+            if confirm != "y":
+                print("  Aborted.")
+                return
+            shutil.rmtree(browse_profile)
+        os.makedirs(browse_profile, exist_ok=True)
+        _set_conf("PROFILE_MODE", "persistent")
+        _set_conf("PROFILE_PATH", browse_profile)
+        print(f"  Created fresh profile at {browse_profile}")
+        print("  This is now your default profile.")
+
+    elif subcmd == "clone":
+        profiles = _find_firefox_profiles()
+        if not profiles:
+            print("  No Firefox profiles found in ~/.mozilla/firefox/")
+            sys.exit(1)
+
+        print("  Available Firefox profiles:")
+        for i, p in enumerate(profiles):
+            default_tag = " (default)" if p["default"] else ""
+            print(f"    [{i}] {p['name']}{default_tag}")
+            print(f"        {p['path']}")
+        print()
+
+        choice = input("  Clone which profile? [number] ").strip()
+        try:
+            idx = int(choice)
+            source = profiles[idx]
+        except (ValueError, IndexError):
+            print("  Invalid choice.")
+            return
+
+        if os.path.isdir(browse_profile):
+            confirm = input(f"  Profile already exists at {browse_profile}. Overwrite? [y/N] ").strip().lower()
+            if confirm != "y":
+                print("  Aborted.")
+                return
+            shutil.rmtree(browse_profile)
+
+        print(f"  Cloning '{source['name']}' → {browse_profile}")
+        skip_files = {"lock", ".parentlock", "parent.lock", "compatibility.ini"}
+        shutil.copytree(
+            source["path"], browse_profile,
+            ignore=lambda d, files: [f for f in files if f in skip_files],
+        )
+        _set_conf("PROFILE_MODE", "persistent")
+        _set_conf("PROFILE_PATH", browse_profile)
+        print("  Done. This is now your default profile.")
+        print("  Your original Firefox profile is untouched.")
+
+    elif subcmd == "use":
+        if len(args) < 2:
+            # List available profiles for the user to pick
+            profiles = _find_firefox_profiles()
+            if not profiles:
+                print("  No Firefox profiles found.")
+                print("  Usage: browse profile use <path>")
+                sys.exit(1)
+
+            print("  Available Firefox profiles:")
+            for i, p in enumerate(profiles):
+                default_tag = " (default)" if p["default"] else ""
+                print(f"    [{i}] {p['name']}{default_tag}")
+                print(f"        {p['path']}")
+            print()
+            print("  WARNING: Using a system profile directly means Firefox and")
+            print("  browse cannot run at the same time (profile lock conflict).")
+            print()
+
+            choice = input("  Use which profile? [number] ").strip()
+            try:
+                idx = int(choice)
+                target = profiles[idx]["path"]
+            except (ValueError, IndexError):
+                print("  Invalid choice.")
+                return
+        else:
+            target = os.path.expanduser(args[1])
+            if not os.path.isdir(target):
+                print(f"  Not a directory: {target}")
+                sys.exit(1)
+
+        print(f"  WARNING: Using system profile directly at {target}")
+        print("  Firefox must be closed when running browse with this profile.")
+        _set_conf("PROFILE_MODE", "persistent")
+        _set_conf("PROFILE_PATH", target)
+        print(f"  Default profile set to: {target}")
+
+    elif subcmd == "disposable":
+        _set_conf("PROFILE_MODE", "disposable")
+        print("  Default set to disposable (temporary) profiles.")
+        print("  Each launch gets a fresh profile that's discarded on exit.")
+
+    else:
+        print(f"  Unknown profile command: {subcmd}")
+        print("  Commands: new, clone, use, disposable")
+        sys.exit(1)
+
+
+def _set_conf(key, value):
+    """Set a key in browse.conf."""
+    if not os.path.exists(CONF_PATH):
+        with open(CONF_PATH, "w") as f:
+            f.write(f"{key}={value}\n")
+        return
+    with open(CONF_PATH) as f:
+        lines = f.readlines()
+    found = False
+    new_lines = []
+    for line in lines:
+        if line.strip().startswith(f"{key}="):
+            new_lines.append(f"{key}={value}\n")
+            found = True
+        else:
+            new_lines.append(line)
+    if not found:
+        new_lines.append(f"{key}={value}\n")
+    with open(CONF_PATH, "w") as f:
+        f.writelines(new_lines)
 
 
 def main():
@@ -282,7 +471,10 @@ def main():
         finally:
             agent.detach()
 
+    elif cmd == "profile":
+        _handle_profile(args[1:])
+
     else:
         print(f"Unknown command: {cmd}")
-        print("Usage: browse [block|unblock|blocklist|cookies|scripts|run]")
+        print("Usage: browse [block|unblock|blocklist|cookies|scripts|run|profile]")
         sys.exit(1)

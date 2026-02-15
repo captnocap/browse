@@ -81,6 +81,8 @@ HARDENING_PREFS = {
     'startup.homepage_welcome_url.additional': '',
     'datareporting.policy.dataSubmissionPolicyBypassNotification': True,
     'security.sandbox.warn_unprivileged_namespaces': False,
+    'extensions.lastAppVersion': '0',
+    'browser.startup.homepage_override.mstone': 'ignore',
     'webdriver.load.strategy': 'normal',
 }
 
