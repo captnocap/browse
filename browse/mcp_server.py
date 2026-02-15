@@ -403,7 +403,7 @@ def browse_connect() -> str:
 
 @mcp.tool
 def browse_navigate(url: str, browser_id: str = "") -> str:
-    """Navigate to a URL in a browser.
+    """Navigate to a URL in a browser. Returns the page content — no need to call browse_extract after this.
 
     Args:
         url: The URL to visit.
@@ -449,7 +449,7 @@ def browse_search(query: str, engine: str = "google", browser_id: str = "") -> s
 
 @mcp.tool
 def browse_click(selector: str, browser_id: str = "") -> str:
-    """Click an element on the page.
+    """Click an element on the page. Waits for the page to settle, then returns updated content — no need to call browse_extract after this.
 
     Args:
         selector: CSS selector for the element to click.
@@ -468,19 +468,22 @@ def browse_click(selector: str, browser_id: str = "") -> str:
             EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
         el.click()
 
-    time.sleep(1)
+    time.sleep(2)
     content = _extract(browser)
     return _format_result(content, bid)
 
 
 @mcp.tool
 def browse_type(selector: str, text: str, submit: bool = False, browser_id: str = "") -> str:
-    """Type text into an input field.
+    """Type text into an input field. Returns updated page content — no need to call browse_extract after this.
+
+    For chat UIs (DuckDuckGo AI, ChatGPT, etc.), do NOT use submit=True after the first message.
+    Instead use browse_type to fill the input, then browse_click on the send button.
 
     Args:
         selector: CSS selector for the input element.
         text: The text to type.
-        submit: If True, submit the parent form after typing.
+        submit: If True, press Enter after typing. Only use for search forms, not chat UIs.
         browser_id: Which browser to use.
     """
     bid, browser = _get_browser(browser_id or None)
@@ -500,6 +503,7 @@ def browse_type(selector: str, text: str, submit: bool = False, browser_id: str 
             el.clear()
             el.send_keys(text)
 
+    time.sleep(2)
     content = _extract(browser)
     return _format_result(content, bid)
 
@@ -508,7 +512,9 @@ def browse_type(selector: str, text: str, submit: bool = False, browser_id: str 
 def browse_extract(browser_id: str = "") -> str:
     """Re-extract content from the current page.
 
-    Use if the page has changed (JS updates, scrolling, waiting).
+    You usually don't need this — browse_navigate, browse_click, browse_type,
+    browse_back, and browse_forward all return updated page content already.
+    Only use this if you're waiting for async JS updates or need to re-read.
 
     Args:
         browser_id: Which browser. Leave empty for the most recent one.
@@ -546,7 +552,7 @@ def browse_screenshot(browser_id: str = "") -> list:
 
 @mcp.tool
 def browse_back(browser_id: str = "") -> str:
-    """Go back to the previous page.
+    """Go back to the previous page. Returns updated page content.
 
     Args:
         browser_id: Which browser. Leave empty for the most recent one.
@@ -556,14 +562,14 @@ def browse_back(browser_id: str = "") -> str:
         browser["client"].send({"cmd": "back"})
     else:
         browser["driver"].back()
-    time.sleep(1)
+    time.sleep(2)
     content = _extract(browser)
     return _format_result(content, bid)
 
 
 @mcp.tool
 def browse_forward(browser_id: str = "") -> str:
-    """Go forward to the next page.
+    """Go forward to the next page. Returns updated page content.
 
     Args:
         browser_id: Which browser. Leave empty for the most recent one.
@@ -573,7 +579,7 @@ def browse_forward(browser_id: str = "") -> str:
         browser["client"].send({"cmd": "forward"})
     else:
         browser["driver"].forward()
-    time.sleep(1)
+    time.sleep(2)
     content = _extract(browser)
     return _format_result(content, bid)
 
