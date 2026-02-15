@@ -299,7 +299,10 @@ def patch_omni(firefox_path, force=False):
     Replaces the candy-stripe remote control CSS with:
     - Hidden by default (no red bar)
     - Green glow when agents are connected
-    - Per-agent tab coloring
+
+    Firefox uses a custom omni.ja format with a prepended optimization header
+    that Python's zipfile module can't handle. We use the system unzip/zip
+    commands instead.
 
     Works on both Firefox ESR and Tor Browser installations.
 
@@ -310,6 +313,9 @@ def patch_omni(firefox_path, force=False):
     Returns:
         True if patched, False if already patched (and not forced).
     """
+    import subprocess
+    import tempfile
+
     marker_path = os.path.join(firefox_path, _OMNI_PATCH_MARKER)
 
     if not force and os.path.exists(marker_path):
@@ -323,48 +329,40 @@ def patch_omni(firefox_path, force=False):
 
     css_file = "chrome/browser/skin/classic/browser/urlbar-searchbar.css"
 
-    # Read the existing omni.ja
-    tmp_path = omni_path + ".tmp"
-    patched = False
+    # Extract the CSS file using system unzip (handles Firefox's custom format)
+    with tempfile.TemporaryDirectory(prefix="browse_omni_") as tmpdir:
+        result = subprocess.run(
+            ["unzip", "-o", omni_path, css_file, "-d", tmpdir],
+            capture_output=True, text=True)
+        css_path = os.path.join(tmpdir, css_file)
 
-    try:
-        zin = zipfile.ZipFile(omni_path, "r")
-    except (zipfile.BadZipFile, Exception) as e:
-        # Corrupt or unreadable zip - skip patching
-        print(f"  Warning: Cannot read {omni_path}: {e}")
-        print(f"           Skipping omni.ja patch (indicator CSS will use defaults)")
-        with open(marker_path, "w") as f:
-            f.write("omni_skipped_corrupt")
-        return False
+        if not os.path.exists(css_path):
+            print(f"  Warning: {css_file} not found in {omni_path}")
+            with open(marker_path, "w") as f:
+                f.write("omni_skipped_no_css")
+            return False
 
-    with zin:
-        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
-            for item in zin.infolist():
-                data = zin.read(item.filename)
-                if item.filename == css_file:
-                    text = data.decode("utf-8")
-                    # Replace original red candy-stripe
-                    if _REMOTE_CONTROL_CSS_OLD in text:
-                        text = text.replace(
-                            _REMOTE_CONTROL_CSS_OLD,
-                            _REMOTE_CONTROL_CSS_NEW
-                        )
-                        patched = True
-                    # Replace previous browse patch version
-                    old_marker = "/* Browse agent indicator"
-                    if not patched and old_marker in text:
-                        idx = text.find(old_marker)
-                        end = text.find("\n/**", idx)
-                        if end < 0:
-                            end = len(text)
-                        # Keep everything before the old marker, insert new
-                        text = text[:idx] + _REMOTE_CONTROL_CSS_NEW.split("}")[-1].lstrip() + "\n" + text[end:]
-                        patched = True
-                    data = text.encode("utf-8")
-                zout.writestr(item, data)
+        with open(css_path, "r") as f:
+            text = f.read()
 
-    # Replace original
-    shutil.move(tmp_path, omni_path)
+        patched = False
+        if _REMOTE_CONTROL_CSS_OLD in text:
+            text = text.replace(_REMOTE_CONTROL_CSS_OLD, _REMOTE_CONTROL_CSS_NEW)
+            patched = True
+
+        if not patched:
+            # Already patched or CSS structure changed
+            with open(marker_path, "w") as f:
+                f.write("omni_already_clean")
+            return True
+
+        with open(css_path, "w") as f:
+            f.write(text)
+
+        # Update the CSS back into omni.ja using system zip
+        subprocess.run(
+            ["zip", "-0", omni_path, css_file],
+            cwd=tmpdir, capture_output=True, text=True)
 
     with open(marker_path, "w") as f:
         f.write("omni_patched")

@@ -211,7 +211,6 @@ def launch_firefox(firefox_path=None, geckodriver_path=None,
         A Selenium WebDriver (Firefox) instance.
     """
     from .stealth import (patch_libxul, is_patched,
-                          patch_omni, is_omni_patched,
                           build_stealth_extension)
 
     # Resolve paths
@@ -238,9 +237,6 @@ def launch_firefox(firefox_path=None, geckodriver_path=None,
     if not is_patched(firefox_path):
         patch_libxul(firefox_path)
 
-    if not is_omni_patched(firefox_path):
-        patch_omni(firefox_path)
-
     # Set up environment
     setup_env(firefox_path)
 
@@ -265,10 +261,19 @@ def launch_firefox(firefox_path=None, geckodriver_path=None,
         for k, v in pref_dict.items():
             options.set_preference(k, v)
 
-    # Profile
+    # Profile — ensure userChrome.css is present to hide the candycane
+    # before the browser window renders (CSS injection after launch is too late).
     if profile_path:
+        _ensure_user_chrome_css(profile_path)
         options.add_argument("-profile")
         options.add_argument(profile_path)
+    else:
+        # Create a temp profile with userChrome.css pre-installed
+        import tempfile
+        _tmp_profile = tempfile.mkdtemp(prefix="browse_profile_")
+        _ensure_user_chrome_css(_tmp_profile)
+        options.add_argument("-profile")
+        options.add_argument(_tmp_profile)
 
     # Launch
     service = Service(executable_path=geckodriver_path)
@@ -282,4 +287,80 @@ def launch_firefox(firefox_path=None, geckodriver_path=None,
     except Exception as e:
         print(f"  Warning: stealth extension failed to install: {e}")
 
+    # Inject chrome CSS to hide the automation candycane and add agent glow.
+    # Done at runtime instead of patching omni.ja (which uses a custom format).
+    try:
+        _inject_chrome_css(driver)
+    except Exception as e:
+        print(f"  Warning: chrome CSS injection failed: {e}")
+
     return driver
+
+
+# ─── Profile userChrome.css ──────────────────────────────────────────────
+
+def _ensure_user_chrome_css(profile_path):
+    """Write userChrome.css into a profile to hide the automation candycane.
+
+    This is loaded by Firefox before the window renders, so there's no
+    flash of the red stripe. Requires toolkit.legacyUserProfileCustomizations.stylesheets = true.
+    """
+    chrome_dir = os.path.join(profile_path, "chrome")
+    os.makedirs(chrome_dir, exist_ok=True)
+    css_path = os.path.join(chrome_dir, "userChrome.css")
+    with open(css_path, "w") as f:
+        f.write(_CHROME_CSS)
+
+
+# ─── Chrome CSS Injection ────────────────────────────────────────────────
+
+_CHROME_CSS = """
+/* Hide the Selenium/Marionette automation indicator (candycane) */
+:root[remotecontrol] #remote-control-box { visibility: hidden !important; }
+:root[remotecontrol] #remote-control-icon { display: none !important; }
+:root[remotecontrol] #urlbar-background {
+  background-image: none !important;
+  animation: none !important;
+}
+
+/* Browse agent indicator — green glow when agents are connected */
+@keyframes agent-pulse {
+  0%, 100% {
+    box-shadow: 0 0 8px #00ff88, 0 0 3px #00ff88 inset;
+    border-color: #00ff88;
+  }
+  50% {
+    box-shadow: 0 0 14px #00ffaa, 0 0 5px #00ffaa inset;
+    border-color: #00ffaa;
+  }
+}
+
+:root[browseagent] #urlbar-background {
+  border: 2px solid #00ff88 !important;
+  box-shadow: 0 0 8px #00ff88, 0 0 3px #00ff88 inset !important;
+  animation: agent-pulse 2s ease-in-out infinite !important;
+}
+
+:root[browseagent] #navigator-toolbox {
+  border-bottom: 1px solid #00ff8855 !important;
+}
+"""
+
+
+def _inject_chrome_css(driver):
+    """Inject CSS into the browser chrome to hide automation indicators.
+
+    Uses nsIStyleSheetService to register a user agent stylesheet, which
+    is the proper way to inject CSS into Firefox's chrome context.
+    """
+    with driver.context(driver.CONTEXT_CHROME):
+        driver.execute_script("""
+            var sss = Components.classes['@mozilla.org/content/style-sheet-service;1']
+                        .getService(Components.interfaces.nsIStyleSheetService);
+            var css = arguments[0];
+            var uri = Services.io.newURI(
+                'data:text/css,' + encodeURIComponent(css));
+            if (!sss.sheetRegistered(uri, sss.USER_SHEET)) {
+                sss.loadAndRegisterSheet(uri, sss.USER_SHEET);
+            }
+        """, _CHROME_CSS)
