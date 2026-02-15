@@ -309,10 +309,10 @@ def _format_result(content, browser_id):
 
 @mcp.tool
 def browse_status() -> str:
-    """Check browser status. If no browsers are open and a session is
-    available, automatically connects to it.
+    """Check what browsers are available. If the user's browser session is running,
+    automatically connects to it and returns the current page content.
 
-    Only call this once — do NOT call browse_status again.
+    Call this first before using any other browse tools. Only call it once.
     """
     # If no browsers open and a session is available, auto-connect
     if not _browsers:
