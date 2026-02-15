@@ -25,7 +25,7 @@ from selenium.webdriver.firefox.service import Service
 HARDENING_PREFS = {
     # ── Core anti-fingerprinting ──────────────────────────────────────
     'privacy.resistFingerprinting': True,
-    'privacy.resistFingerprinting.letterboxing': True,
+    'privacy.resistFingerprinting.letterboxing': False,
 
     # ── First-party isolation ─────────────────────────────────────────
     'privacy.firstparty.isolate': True,

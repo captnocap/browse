@@ -242,6 +242,8 @@ class SessionServer:
                     self._pulse_agent_tab(idx)
             except Exception:
                 pass
+            # Ensure we're back in content context after chrome calls
+            self.driver.set_context(self.driver.CONTEXT_CONTENT)
 
         if action == "navigate":
             self.driver.set_page_load_timeout(cmd.get("timeout", 30))
