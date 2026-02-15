@@ -330,6 +330,26 @@ _CHROME_CSS = """
   animation: none !important;
 }
 
+/* [10] Per-tab agent indicator — styled via browse-agent attribute on XUL tab elements.
+   Set by session.py _mark_agent_tab(), cleared on 10 min expiry.
+   Works on both active and inactive tabs in the tab strip. */
+tab[browse-agent="true"] .tab-background {
+  background: rgba(255, 0, 170, 0.12) !important;
+  outline: 1px solid rgba(255, 0, 170, 0.35) !important;
+  outline-offset: -1px;
+}
+
+tab[browse-agent="true"] .tab-line {
+  background-color: #ff00aa !important;
+  opacity: 1 !important;
+  height: 2px !important;
+}
+
+tab[browse-agent="true"][selected] .tab-background {
+  background: rgba(255, 0, 170, 0.2) !important;
+  outline: 1px solid rgba(255, 0, 170, 0.5) !important;
+}
+
 """
 
 

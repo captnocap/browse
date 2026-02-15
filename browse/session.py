@@ -196,11 +196,18 @@ class SessionServer:
     def _mark_agent_tab(self):
         """[4] Record the current Selenium-targeted tab for the extension to highlight.
         Called from use_tab(). The extension polls bar_tabs via [5] and injects the bar via [6].
+        Also stamps the XUL tab element with browse-agent attribute for [10] tab strip styling.
         See stealth.py for the full visual indicator flow."""
         try:
             handles = self.driver.window_handles
             idx = handles.index(self.driver.current_window_handle)
             self._agent_bar_tabs[idx] = time.time()
+            # [10] Stamp the actual tab element in chrome context for tab strip styling
+            with self.driver.context(self.driver.CONTEXT_CHROME):
+                self.driver.execute_script('''
+                    let tab = gBrowser.tabs[arguments[0]];
+                    if (tab) tab.setAttribute("browse-agent", "true");
+                ''', idx)
         except Exception:
             pass
 
@@ -463,10 +470,21 @@ class SessionServer:
                 active = (time.time() - session_server._last_command_time) < 30
                 now = time.time()
                 # [5] Serve bar_tabs for the indicator extension to poll (see stealth.py flow).
-                # Clean up entries older than 10 min.
+                # Clean up entries older than 10 min, and clear [10] tab attributes.
+                stale = [i for i, ts in session_server._agent_bar_tabs.items()
+                         if now - ts >= 600]
+                for idx in stale:
+                    del session_server._agent_bar_tabs[idx]
+                    try:
+                        with session_server.driver.context(session_server.driver.CONTEXT_CHROME):
+                            session_server.driver.execute_script('''
+                                let tab = gBrowser.tabs[arguments[0]];
+                                if (tab) tab.removeAttribute("browse-agent");
+                            ''', idx)
+                    except Exception:
+                        pass
                 bar_tabs = {str(i): ts for i, ts in
-                            session_server._agent_bar_tabs.items()
-                            if now - ts < 600}
+                            session_server._agent_bar_tabs.items()}
                 self.wfile.write(json.dumps({
                     "agents": session_server.client_count,
                     "active": active,

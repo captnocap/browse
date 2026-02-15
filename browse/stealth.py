@@ -167,11 +167,15 @@ def patch_libxul(firefox_path, force=False):
 # │    [9] Re-injection — browser.tabs.onUpdated re-injects the bar after  │
 # │        page loads on tracked (non-dismissed) tabs, since navigations   │
 # │        destroy the DOM.                                                │
+# │   [10] Tab strip styling — _mark_agent_tab() sets browse-agent="true"  │
+# │        on XUL tab elements via chrome context. Styled by userChrome.css │
+# │        rules in firefox.py. Works on both active and inactive tabs.    │
+# │        Cleared on 10 min expiry by the status endpoint cleanup.        │
 # │                                                                        │
 # │  Files involved:                                                       │
 # │    stealth.py  — [1] omni.ja patch, [6][7][8][9] extension code        │
-# │    firefox.py  — [2] userChrome.css, [3] runtime CSS injection         │
-# │    session.py  — [4] _mark_agent_tab, [5] status endpoint bar_tabs     │
+# │    firefox.py  — [2][10] userChrome.css, [3] runtime CSS injection     │
+# │    session.py  — [4][10] _mark_agent_tab, [5] status endpoint bar_tabs │
 # └─────────────────────────────────────────────────────────────────────────┘
 
 _OMNI_PATCH_MARKER = ".browse_omni_patched"
