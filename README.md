@@ -1,6 +1,6 @@
 # browse
 
-AI agent browser with native anti-fingerprinting. Uses Tor Browser's engine for its C++-level fingerprint resistance (canvas, WebGL, fonts, screen letterboxing, timer clamping) without routing traffic through the Tor network.
+AI agent browser with native anti-fingerprinting. Uses Firefox ESR with `privacy.resistFingerprinting` (RFP) for C++-level fingerprint resistance — canvas noise, WebGL spoofing, font restriction, screen letterboxing, timer clamping — with an anonymity set of ~200M Firefox users.
 
 This gives you a browser that looks like a real human's browser to every bot detection system on the internet, controllable from Python.
 
@@ -8,7 +8,7 @@ This gives you a browser that looks like a real human's browser to every bot det
 git clone https://github.com/captnocap/browse.git && cd browse && ./setup.sh
 ```
 
-That's it. Linux x86_64, Python 3.10+. Setup downloads Tor Browser, patches it, and configures your AI frontend. After setup, just ask your AI to browse — it launches the browser automatically. No servers to run, no config to edit.
+Linux x86_64, Python 3.10+. Setup downloads Firefox ESR, patches it, and configures your AI frontend. After setup, just ask your AI to browse — it launches the browser automatically.
 
 For Python usage:
 
@@ -23,17 +23,19 @@ with AgentBrowser() as browser:
 
 Every browser automation stealth tool follows the same pattern: take Chrome, then inject JavaScript to override `navigator.webdriver`, spoof canvas, fake WebGL values, etc. The problem is that these JS overrides are detectable. Anti-bot systems check `Function.prototype.toString()`, inspect prototype chains, compare iframe values, and run timing attacks to find the patches.
 
-Tor Browser solves this at the C++ level. Canvas noise, WebGL spoofing, font restriction, screen letterboxing, and timer clamping are all implemented natively in the browser engine. There's nothing to detect because there's no JavaScript override — the browser genuinely behaves differently at the lowest level.
+Firefox with `privacy.resistFingerprinting` solves this at the C++ level. Canvas noise, WebGL spoofing, font restriction, screen letterboxing, and timer clamping are all implemented natively in the browser engine. There's nothing to detect because there's no JavaScript override — the browser genuinely behaves differently at the lowest level.
 
-`browse` takes Tor Browser, disables the Tor network routing (uses direct connection or your own proxy), and patches out the single remaining automation signal (`navigator.webdriver`) at the binary level. The result: a browser that passes every bot detection check while being fully controllable from Python.
+`browse` takes Firefox ESR, enables RFP hardening, and patches out the single remaining automation signal (`navigator.webdriver`) at the binary level. The result: a browser that passes every bot detection check while being fully controllable from Python.
 
 ## What it does
 
-- **Native anti-fingerprinting** — canvas noise, WebGL spoofing, font restriction, letterboxing, timer clamping — all C++-level, no JS injection
+- **Native anti-fingerprinting** — canvas noise, WebGL spoofing, font restriction, letterboxing, timer clamping — all C++-level via RFP, no JS injection
 - **Binary-patched `navigator.webdriver`** — the property doesn't exist (not overridden to `false`, genuinely `undefined`)
 - **Prompt injection filtering** — extracts only visible page content, strips 15+ CSS hiding tricks used to inject hidden instructions for AI agents
 - **Two operating modes** — quick mode (spawn, use, close) and session mode (persistent browser shared between human and AI)
-- **Agent indicator** — address bar glows green when AI agents are connected, disappears when they disconnect (patched into browser chrome via `omni.ja`)
+- **Per-tab agent indicator** — pink bar appears on tabs the AI has touched, persists until you interact with the tab. Browser theme shifts to match so the indicator survives page loads
+- **Tab management** — agents can open, list, and switch between tabs without disrupting the human's browsing
+- **Persistent profiles** — browser state (extensions, bookmarks, cookies) persists across sessions by default. Clone from your system Firefox or start fresh
 - **Cookie import** — import cookies from Firefox, Chrome, Chromium, or Brave so you're logged into your sites
 - **Site blocklist** — prevent agents from navigating to specific domains, with a built-in typosquat/phishing preset
 - **Challenge detection** — automatically detects CAPTCHAs/challenges and waits for human to solve them before resuming
@@ -51,7 +53,7 @@ cd browse
 ./setup.sh
 ```
 
-This downloads Tor Browser and geckodriver, installs the Python package, applies the stealth binary patch, and configures MCP for your AI frontend. Takes about a minute.
+This downloads Firefox ESR and geckodriver, installs the Python package, applies the stealth binary patch, and configures MCP for your AI frontend.
 
 ### 2. Quick mode — spawn, use, close
 
@@ -84,9 +86,33 @@ print(content.text)
 agent.detach()  # browser stays open
 ```
 
-The browser stays open between connections. You can use it normally with mouse and keyboard while the AI is detached. When an agent connects, the address bar glows green so you always know when AI is active. The glow disappears when all agents disconnect.
+The browser stays open between connections. You can use it normally with mouse and keyboard while the AI is detached. When an agent is active on a tab, a pink indicator bar appears at the top of the page and the browser theme shifts to pink. When you interact with the tab (click, type, scroll), the indicator clears and the theme returns to normal.
 
-### 4. Cookie import
+### 4. Profile management
+
+By default, browser state persists across sessions in `~/.config/browse/profile`.
+
+```bash
+# Clone your existing Firefox profile (isolated copy)
+browse profile clone
+
+# Point at your system Firefox profile directly (shared state)
+browse profile use
+
+# Start with a fresh profile
+browse profile new
+
+# Set default to disposable (temp profile every launch)
+browse profile disposable
+```
+
+For a one-off disposable session:
+
+```bash
+browse --disposable
+```
+
+### 5. Cookie import
 
 Import cookies from your regular browser so you're already logged into your sites:
 
@@ -103,9 +129,7 @@ browse cookies brave
 browse cookies /path/to/cookies.json
 ```
 
-For large imports (200+ domains), you'll get a confirmation prompt since each domain requires a brief navigation.
-
-### 5. Site blocklist
+### 6. Site blocklist
 
 Block domains that agents cannot navigate to (you can still browse them manually):
 
@@ -129,7 +153,7 @@ Subdomains are matched automatically — blocking `4chan.org` also blocks `board
 
 ```python
 # Quick mode
-browser = AgentBrowser(tbb_path=None, proxy=None, headless=False, profile_path=None)
+browser = AgentBrowser(headless=False, profile_path=None)
 
 # Session mode
 agent = AgentBrowser.connect()
@@ -146,6 +170,9 @@ agent = AgentBrowser.connect()
 | `execute_js(script)` | Execute JavaScript in page context |
 | `wait_for(selector, timeout=30)` | Wait for element to appear |
 | `back()` / `forward()` / `refresh()` | Navigation |
+| `list_tabs()` | List all open tabs with titles and URLs |
+| `open_tab(url=None)` | Open a new tab, optionally navigate |
+| `use_tab(index)` | Switch to a tab by index |
 | `current_url` | Current page URL |
 | `page_source` | Current page HTML |
 | `detach()` | Disconnect without closing browser (session mode) |
@@ -182,19 +209,19 @@ browser = AgentBrowser()
 
 ## How the stealth works
 
-### Layer 1: Tor Browser's native anti-fingerprinting
+### Layer 1: Firefox RFP anti-fingerprinting
 
-Tor Browser is a hardened Firefox fork. Its anti-fingerprinting is implemented in C++ in the browser engine itself:
+Firefox's `privacy.resistFingerprinting` provides the same C++-level anti-fingerprinting as Tor Browser, with an anonymity set of ~200M Firefox users instead of ~2M Tor users:
 
-| Signal | What Tor Browser does |
+| Signal | What RFP does |
 |---|---|
-| Canvas | Adds per-origin noise to canvas readback via `privacy.resistFingerprinting` |
+| Canvas | Adds per-origin noise to canvas readback |
 | WebGL | Spoofs vendor/renderer to "Mozilla" |
 | Fonts | Restricts to a standard set, blocks enumeration |
 | Screen size | Rounds viewport to 200x100 increments (letterboxing) |
 | Timers | Clamps `performance.now()` and `Date.now()` precision |
 | WebRTC | Disabled (no IP leak) |
-| User-Agent | Standardized across all Tor Browser users |
+| User-Agent | Standardized across all RFP-enabled Firefox users |
 
 None of this is JavaScript injection. It's native behavior that cannot be detected by page scripts.
 
@@ -208,15 +235,17 @@ We patch `libxul.so` (Firefox's core library) to replace the `"webdriver"` strin
 navigator.webdriver  // undefined (not false, not overridden — undefined)
 ```
 
-This is the same approach used by [undetected_geckodriver](https://github.com/AShujjah/undetected_geckodriver). The patch is applied automatically on first run.
+### Layer 3: Stealth WebExtension
 
-### Layer 3: Automation indicator patch (`omni.ja`)
+A minimal WebExtension injected at `document_start` in the MAIN world provides defense-in-depth. It handles edge cases with a prototype-level Proxy override that survives `toString()` inspection.
 
-Firefox shows a red candy-stripe bar when the browser is under Marionette control. We patch `omni.ja` (the browser's internal chrome archive) to replace this with an agent-aware indicator: the address bar glows green when agents are connected, and returns to normal when they disconnect. The session server toggles a `browseagent` attribute on the browser chrome root element, and the patched CSS responds to it.
+### Layer 4: Visual indicator system
 
-### Layer 4: Stealth WebExtension
+A browser extension manages per-tab agent indicators:
 
-A minimal WebExtension injected at `document_start` in the MAIN world provides defense-in-depth. It handles edge cases with a prototype-level Proxy override that survives `toString()` inspection. This layer is rarely needed since the binary patch handles the property, but it catches any secondary code paths.
+- **Pink content bar** — injected into tabs the agent has touched via `browser.tabs.executeScript()`, persists until the user interacts (click, type, scroll)
+- **Theme shifting** — browser theme swaps between blue (human) and pink (agent) based on which tab is active, so the indicator survives page loads and navigations
+- **Automation candycane hidden** — the default Selenium red stripe is removed via `userChrome.css` (loaded before first paint) and runtime CSS injection
 
 ### Layer 5: Prompt injection filtering
 
@@ -238,7 +267,6 @@ When extracting page content for AI consumption, we walk the DOM and check every
 | `filter: opacity(0)` | Regex on filter |
 | `aria-hidden="true"` | Attribute check |
 | HTML `hidden` attribute | Property check |
-| Hidden child in hidden parent | Subtree skipping |
 
 Additionally:
 - Meta tags are allowlisted (only `description`, `og:title`, etc.)
@@ -255,8 +283,6 @@ When a CAPTCHA or challenge page is detected (Google `/sorry/`, Cloudflare, etc.
 [browse] Challenge cleared. Resuming.
 ```
 
-The AI monitors the URL and page content. Once the challenge clears and the destination page stabilizes, it automatically resumes extraction.
-
 ## Project structure
 
 ```
@@ -266,20 +292,17 @@ browse/
 ├── browse.conf                 # Auto-generated paths, blocklist (gitignored)
 ├── browse/
 │   ├── __init__.py             # Public API exports
-│   ├── __main__.py             # python -m browse.session entry point
-│   ├── cli.py                  # CLI dispatcher (browse, block, cookies, etc.)
+│   ├── __main__.py             # python -m browse entry point
+│   ├── cli.py                  # CLI dispatcher (browse, profile, block, cookies)
 │   ├── agent.py                # AgentBrowser — main API class
 │   ├── content.py              # Page extraction + prompt injection filtering
 │   ├── cookies.py              # Cookie import (Firefox, Chrome, Brave, JSON)
+│   ├── firefox.py              # Firefox ESR launcher with RFP hardening
 │   ├── mcp_server.py           # MCP server for AI frontends
 │   ├── session.py              # Persistent browser session (TCP server/client)
-│   ├── stealth.py              # Binary patcher, omni.ja patcher, extensions
-│   └── tbselenium/             # Vendored + modified tor-browser-selenium
-│       ├── common.py           # + USE_DIRECT mode constant
-│       ├── tbdriver.py         # + Direct connection support
-│       ├── tbbinary.py         # Selenium 4 compatibility stub
-│       ├── utils.py            # Preference setting utilities
-│       └── exceptions.py       # Exception classes
+│   ├── stealth.py              # Binary patcher, extensions, theme system
+│   ├── startpage.html          # Session dashboard (agent/human history)
+│   └── scripts/                # Reusable automation scripts
 ├── test_botcheck.html          # Bot detection test page
 ├── test_injection.html         # Prompt injection test page (18 CSS tricks)
 └── test_injection.py           # Automated injection test runner
@@ -287,11 +310,11 @@ browse/
 
 ## Requirements
 
-- **Linux x86_64** (binary patching and setup target Linux only — macOS/Windows not yet supported)
+- **Linux x86_64** (binary patching and setup target Linux only)
 - **Python 3.10+**
 - **selenium >= 4**
 
-`setup.sh` handles downloading Tor Browser and geckodriver automatically.
+`setup.sh` handles downloading Firefox ESR and geckodriver automatically.
 
 ## How it compares
 
@@ -300,13 +323,13 @@ browse/
 | Raw Selenium + Chrome | None | Instantly detected |
 | undetected-chromedriver | JS overrides for ~10 signals | Detected by sophisticated systems |
 | Playwright stealth | JS overrides | Detected by Cloudflare, DataDome |
-| **browse** | Native C++ anti-fingerprinting + binary patch | Passes all known checks |
+| **browse** | Native C++ anti-fingerprinting via RFP + binary patch | Passes all known checks |
 
-The fundamental difference: every other tool tries to make Chrome *look like* a normal browser via JavaScript. `browse` uses a browser that *is* a normal browser (Tor Browser) — it just removes the automation flag at the binary level.
+The fundamental difference: every other tool tries to make Chrome *look like* a normal browser via JavaScript. `browse` uses Firefox with RFP — a browser that *genuinely* implements anti-fingerprinting at the engine level — and removes the automation flag at the binary level.
 
 ## MCP server
 
-For AI frontends that support [Model Context Protocol](https://modelcontextprotocol.io/) (Claude Desktop, LM Studio, etc.), browse ships an MCP server that exposes the browser as tools.
+For AI frontends that support [Model Context Protocol](https://modelcontextprotocol.io/) (Claude Desktop, Claude Code, LM Studio, etc.), browse ships an MCP server that exposes the browser as tools.
 
 ### Setup
 
@@ -315,7 +338,7 @@ For AI frontends that support [Model Context Protocol](https://modelcontextproto
 pip install -e ".[mcp]"
 ```
 
-### Claude Desktop / LM Studio config
+### Claude Desktop / Claude Code config
 
 ```json
 {
@@ -327,7 +350,7 @@ pip install -e ".[mcp]"
 }
 ```
 
-That's it. The AI can now browse the web. No separate server to run.
+The AI can now browse the web. No separate server to run.
 
 ### How it works
 
@@ -335,7 +358,7 @@ The MCP server supports two modes that the AI agent picks based on context:
 
 **Quick mode** — the agent launches its own browser, does the work, closes it. Supports multiple browsers in parallel for fetching data from several sites at once.
 
-**Session mode** — if you already have a browser open (`browse`), the agent automatically connects to it. When it disconnects, your browser stays open.
+**Session mode** — if you already have a browser open (`browse`), the agent automatically connects to it. When it disconnects, your browser stays open. The session browser is always preferred over quick browsers.
 
 ### Available tools
 
@@ -349,16 +372,17 @@ The MCP server supports two modes that the AI agent picks based on context:
 | `browse_click` | Click an element on the page |
 | `browse_type` | Type into an input field, optionally submit |
 | `browse_extract` | Re-extract current page content |
-| `browse_screenshot` | Take a screenshot (returns image) |
+| `browse_screenshot` | Take a screenshot (downscaled to reduce context usage) |
 | `browse_back` / `browse_forward` | Navigate history |
+| `browse_scripts` | List available automation scripts |
+| `browse_run_script` | Run a reusable automation script |
 | `browse_close` | Close browser (quick) or disconnect (session) |
 
-All tools take an optional `browser_id` for parallel browsing. Each result includes the page content (with prompt injection filtering) plus a menu of suggested next actions, so the agent picks from options rather than burning GPU cycles reasoning about what to do next.
+All tools take an optional `browser_id` for parallel browsing. Each result includes the page content (with prompt injection filtering) plus suggested next actions.
 
 ## Credits
 
-- [Tor Browser](https://www.torproject.org/) — the anti-fingerprinting engine
-- [tor-browser-selenium](https://github.com/webfp/tor-browser-selenium) — vendored and modified (MIT license)
+- [Firefox ESR](https://www.mozilla.org/en-US/firefox/enterprise/) — the browser engine with RFP anti-fingerprinting
 - [undetected_geckodriver](https://github.com/AShujjah/undetected_geckodriver) — binary patching approach
 
 ## License
