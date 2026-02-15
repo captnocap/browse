@@ -326,27 +326,6 @@ _CHROME_CSS = """
   animation: none !important;
 }
 
-/* Browse agent indicator — green glow when agents are connected */
-@keyframes agent-pulse {
-  0%, 100% {
-    box-shadow: 0 0 8px #00ff88, 0 0 3px #00ff88 inset;
-    border-color: #00ff88;
-  }
-  50% {
-    box-shadow: 0 0 14px #00ffaa, 0 0 5px #00ffaa inset;
-    border-color: #00ffaa;
-  }
-}
-
-:root[browseagent] #urlbar-background {
-  border: 2px solid #00ff88 !important;
-  box-shadow: 0 0 8px #00ff88, 0 0 3px #00ff88 inset !important;
-  animation: agent-pulse 2s ease-in-out infinite !important;
-}
-
-:root[browseagent] #navigator-toolbox {
-  border-bottom: 1px solid #00ff8855 !important;
-}
 """
 
 

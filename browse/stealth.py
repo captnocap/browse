@@ -1,18 +1,17 @@
 """Stealth patches for hiding automation signals.
 
-Two layers:
+Three layers:
 
 Layer 1 — Binary patch: Replaces the "webdriver" string in libxul.so so the
     navigator.webdriver property ceases to exist entirely. Not overridden,
     not false — genuinely undefined, same as a normal browser.
 
 Layer 1b — Omni.ja patch: Replaces the red candy-stripe automation indicator
-    CSS with an agent-aware indicator that glows green when agents connect,
-    plus per-agent tab coloring.
+    CSS with hidden rules so the candycane never appears.
 
 Layer 2 — WebExtension: Injects a content script at document_start in the
     MAIN world that does a prototype-level override of navigator.webdriver
-    as defense-in-depth. Handles edge cases like iframes.
+    as defense-in-depth. Also manages per-tab agent indicators and theme.
 
 All patches work on both Firefox ESR and Tor Browser (same engine).
 """
@@ -136,7 +135,7 @@ def patch_libxul(firefox_path, force=False):
 
 # ─── Layer 1b: Omni.ja Patch (automation indicator) ──────────────────────
 # Replaces the red candy-stripe "remote control" CSS in the browser chrome
-# with an agent-aware indicator that glows green when agents are connected.
+# with hidden rules so the candycane never appears.
 
 _OMNI_PATCH_MARKER = ".browse_omni_patched"
 
@@ -179,117 +178,6 @@ _REMOTE_CONTROL_CSS_NEW = """:root[remotecontrol] {
     background-image: none;
     animation: none !important;
   }
-}
-
-/* Browse agent indicator — controlled by browseagent attribute on root */
-@keyframes agent-pulse {
-  0%, 100% {
-    box-shadow: 0 0 8px #ff00aa, 0 0 3px #ff00aa inset;
-    border-color: #ff00aa;
-  }
-  50% {
-    box-shadow: 0 0 14px #ff22bb, 0 0 5px #ff22bb inset;
-    border-color: #ff22bb;
-  }
-}
-
-:root[browseagent] #urlbar-background {
-  border: 2px solid #ff00aa !important;
-  box-shadow: 0 0 8px #ff00aa, 0 0 3px #ff00aa inset !important;
-  animation: agent-pulse 2s ease-in-out infinite !important;
-}
-
-:root[browseagent] #navigator-toolbox {
-  border-bottom: none !important;
-}
-
-/* ─── Per-tab agent activity ─────────────────────────────────────────── */
-/* Tabs get browseagent-color attribute via chrome JS when agent touches them */
-
-@keyframes agent-tab-pulse {
-  0%, 100% { box-shadow: 0 0 4px #00ff88; opacity: 0.8; }
-  50% { box-shadow: 0 0 10px #00ff88; opacity: 1; }
-}
-
-.tabbrowser-tab[browseagent-color="green"] > .tab-stack > .tab-background {
-  background: linear-gradient(to bottom, rgba(0,255,136,0.18), transparent) !important;
-}
-.tabbrowser-tab[browseagent-color="green"] > .tab-stack > .tab-background > .tab-context-line {
-  background-color: #00ff88 !important;
-  display: block !important;
-  opacity: 1 !important;
-  height: 3px !important;
-  animation: agent-tab-pulse 2s ease-in-out infinite !important;
-}
-
-.tabbrowser-tab[browseagent-color="blue"] > .tab-stack > .tab-background {
-  background: linear-gradient(to bottom, rgba(0,170,255,0.18), transparent) !important;
-}
-.tabbrowser-tab[browseagent-color="blue"] > .tab-stack > .tab-background > .tab-context-line {
-  background-color: #00aaff !important;
-  display: block !important;
-  opacity: 1 !important;
-  height: 3px !important;
-}
-
-.tabbrowser-tab[browseagent-color="orange"] > .tab-stack > .tab-background {
-  background: linear-gradient(to bottom, rgba(255,136,0,0.18), transparent) !important;
-}
-.tabbrowser-tab[browseagent-color="orange"] > .tab-stack > .tab-background > .tab-context-line {
-  background-color: #ff8800 !important;
-  display: block !important;
-  opacity: 1 !important;
-  height: 3px !important;
-}
-
-.tabbrowser-tab[browseagent-color="magenta"] > .tab-stack > .tab-background {
-  background: linear-gradient(to bottom, rgba(255,0,255,0.18), transparent) !important;
-}
-.tabbrowser-tab[browseagent-color="magenta"] > .tab-stack > .tab-background > .tab-context-line {
-  background-color: #ff00ff !important;
-  display: block !important;
-  opacity: 1 !important;
-  height: 3px !important;
-}
-
-.tabbrowser-tab[browseagent-color="yellow"] > .tab-stack > .tab-background {
-  background: linear-gradient(to bottom, rgba(255,221,0,0.18), transparent) !important;
-}
-.tabbrowser-tab[browseagent-color="yellow"] > .tab-stack > .tab-background > .tab-context-line {
-  background-color: #ffdd00 !important;
-  display: block !important;
-  opacity: 1 !important;
-  height: 3px !important;
-}
-
-.tabbrowser-tab[browseagent-color="cyan"] > .tab-stack > .tab-background {
-  background: linear-gradient(to bottom, rgba(0,255,255,0.18), transparent) !important;
-}
-.tabbrowser-tab[browseagent-color="cyan"] > .tab-stack > .tab-background > .tab-context-line {
-  background-color: #00ffff !important;
-  display: block !important;
-  opacity: 1 !important;
-  height: 3px !important;
-}
-
-.tabbrowser-tab[browseagent-color="red"] > .tab-stack > .tab-background {
-  background: linear-gradient(to bottom, rgba(255,68,102,0.18), transparent) !important;
-}
-.tabbrowser-tab[browseagent-color="red"] > .tab-stack > .tab-background > .tab-context-line {
-  background-color: #ff4466 !important;
-  display: block !important;
-  opacity: 1 !important;
-  height: 3px !important;
-}
-
-.tabbrowser-tab[browseagent-color="purple"] > .tab-stack > .tab-background {
-  background: linear-gradient(to bottom, rgba(170,136,255,0.18), transparent) !important;
-}
-.tabbrowser-tab[browseagent-color="purple"] > .tab-stack > .tab-background > .tab-context-line {
-  background-color: #aa88ff !important;
-  display: block !important;
-  opacity: 1 !important;
-  height: 3px !important;
 }"""
 
 
@@ -300,7 +188,7 @@ def is_omni_patched(firefox_path):
 
 
 def patch_omni(firefox_path, force=False):
-    """Patch omni.ja to replace the red automation indicator with the agent glow.
+    """Patch omni.ja to hide the red automation indicator (candycane).
 
     Replaces the candy-stripe remote control CSS with:
     - Hidden by default (no red bar)
