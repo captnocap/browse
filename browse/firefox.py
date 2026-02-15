@@ -290,8 +290,8 @@ def launch_firefox(firefox_path=None, geckodriver_path=None,
     except Exception as e:
         print(f"  Warning: stealth extension failed to install: {e}")
 
-    # Inject chrome CSS to hide the automation candycane and add agent glow.
-    # Done at runtime instead of patching omni.ja (which uses a custom format).
+    # [3] Runtime CSS injection — fallback candycane hiding.
+    # See stealth.py for the full visual indicator flow.
     try:
         _inject_chrome_css(driver)
     except Exception as e:
@@ -301,6 +301,8 @@ def launch_firefox(firefox_path=None, geckodriver_path=None,
 
 
 # ─── Profile userChrome.css ──────────────────────────────────────────────
+# [2] in the visual indicator flow (see stealth.py for the full numbered map).
+# Written into the profile before launch so Firefox loads it before first paint.
 
 def _ensure_user_chrome_css(profile_path):
     """Write userChrome.css into a profile to hide the automation candycane.
@@ -316,6 +318,8 @@ def _ensure_user_chrome_css(profile_path):
 
 
 # ─── Chrome CSS Injection ────────────────────────────────────────────────
+# [3] in the visual indicator flow (see stealth.py for the full numbered map).
+# Runtime fallback — injected via nsIStyleSheetService after launch.
 
 _CHROME_CSS = """
 /* Hide the Selenium/Marionette automation indicator (candycane) */

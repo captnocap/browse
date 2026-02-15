@@ -54,7 +54,7 @@ class SessionServer:
         self._last_watched_url = None
         self._last_agent_url = None
         self._last_command_time = 0
-        self._agent_bar_tabs = {}  # {tab_index: expiry_timestamp}
+        self._agent_bar_tabs = {}  # {tab_index: timestamp} — [4] in visual indicator flow (see stealth.py)
 
     CHALLENGE_URL_PATTERNS = [
         ("/sorry/", "google_captcha"),
@@ -194,7 +194,9 @@ class SessionServer:
             pass
 
     def _mark_agent_tab(self):
-        """Record the current Selenium-targeted tab for the extension to highlight."""
+        """[4] Record the current Selenium-targeted tab for the extension to highlight.
+        Called from use_tab(). The extension polls bar_tabs via [5] and injects the bar via [6].
+        See stealth.py for the full visual indicator flow."""
         try:
             handles = self.driver.window_handles
             idx = handles.index(self.driver.current_window_handle)
@@ -460,7 +462,8 @@ class SessionServer:
                     tab_count = 0
                 active = (time.time() - session_server._last_command_time) < 30
                 now = time.time()
-                # Clean up entries older than 10 min
+                # [5] Serve bar_tabs for the indicator extension to poll (see stealth.py flow).
+                # Clean up entries older than 10 min.
                 bar_tabs = {str(i): ts for i, ts in
                             session_server._agent_bar_tabs.items()
                             if now - ts < 600}
@@ -624,6 +627,9 @@ def main():
     url_watcher = threading.Thread(target=server._watch_url, daemon=True)
     url_watcher.start()
 
+    # Install indicator extension — drives steps [6]-[9] of the visual indicator flow.
+    # Polls the status endpoint [5] and manages the per-tab bar + theme system.
+    # See stealth.py for the full numbered map.
     try:
         from .stealth import build_indicator_extension
         xpi_path = build_indicator_extension(status_port)

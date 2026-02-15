@@ -136,6 +136,43 @@ def patch_libxul(firefox_path, force=False):
 # ─── Layer 1b: Omni.ja Patch (automation indicator) ──────────────────────
 # Replaces the red candy-stripe "remote control" CSS in the browser chrome
 # with hidden rules so the candycane never appears.
+#
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │  VISUAL INDICATOR FLOW — how the agent bar + theme system works        │
+# │                                                                        │
+# │  Candycane hiding (3 redundant layers — belt + suspenders + duct tape): │
+# │    [1] omni.ja patch (here) — rewrites CSS at the source in the        │
+# │        browser's internal archive. Done once per Firefox install.       │
+# │    [2] userChrome.css (firefox.py) — written into the profile before   │
+# │        launch. Loaded by Firefox before first paint, no flash.         │
+# │    [3] Runtime CSS injection (firefox.py _inject_chrome_css) —         │
+# │        injected via nsIStyleSheetService after launch as fallback.     │
+# │                                                                        │
+# │  Agent indicator (extension-driven, session mode only):                │
+# │    [4] session.py _mark_agent_tab() — when an agent calls use_tab(),   │
+# │        records {tab_index: timestamp} in _agent_bar_tabs.              │
+# │    [5] session.py status endpoint — serves _agent_bar_tabs as          │
+# │        bar_tabs in the JSON status response (HTTP, port+1).            │
+# │    [6] Indicator extension (this file, _INDICATOR_SCRIPT) — polls [5], │
+# │        injects a pink 4px bar into agent-touched tabs via              │
+# │        browser.tabs.executeScript(tabId, ...).                         │
+# │    [7] Extension theme system — applies BASE_THEME (blue/gray) on     │
+# │        load. When user switches to an agent-touched tab, swaps to      │
+# │        ACTIVE_TAB_THEME (pink borders + separator). This ensures the   │
+# │        indicator survives page loads (theme is browser-level, not DOM). │
+# │    [8] User dismissal — when user clicks/types/scrolls on the tab,     │
+# │        the injected bar JS sends browser.runtime.sendMessage            │
+# │        {type:'bar-dismissed'}. Extension removes bar, adds tab to      │
+# │        dismissedTabs set, swaps theme back to BASE_THEME.              │
+# │    [9] Re-injection — browser.tabs.onUpdated re-injects the bar after  │
+# │        page loads on tracked (non-dismissed) tabs, since navigations   │
+# │        destroy the DOM.                                                │
+# │                                                                        │
+# │  Files involved:                                                       │
+# │    stealth.py  — [1] omni.ja patch, [6][7][8][9] extension code        │
+# │    firefox.py  — [2] userChrome.css, [3] runtime CSS injection         │
+# │    session.py  — [4] _mark_agent_tab, [5] status endpoint bar_tabs     │
+# └─────────────────────────────────────────────────────────────────────────┘
 
 _OMNI_PATCH_MARKER = ".browse_omni_patched"
 
@@ -190,15 +227,12 @@ def is_omni_patched(firefox_path):
 def patch_omni(firefox_path, force=False):
     """Patch omni.ja to hide the red automation indicator (candycane).
 
-    Replaces the candy-stripe remote control CSS with:
-    - Hidden by default (no red bar)
-    - Green glow when agents are connected
+    [1] in the visual indicator flow. Replaces the candy-stripe remote
+    control CSS with hidden rules so the red bar never appears.
 
     Firefox uses a custom omni.ja format with a prepended optimization header
     that Python's zipfile module can't handle. We use the system unzip/zip
     commands instead.
-
-    Works on both Firefox ESR and Tor Browser installations.
 
     Args:
         firefox_path: Path to the Firefox (or Tor Browser) directory.
@@ -399,9 +433,14 @@ _INDICATOR_MANIFEST = {
 }
 
 _INDICATOR_SCRIPT = """
+// ── Indicator Extension Background Script ──────────────────────────────
+// Implements steps [6]-[9] of the visual indicator flow.
+// See the numbered map at the top of this file (Layer 1b section).
+
 const POLL_MS = 1000;
 const STATUS_PORT = __STATUS_PORT__;
 
+// [7] Theme system — two states: BASE (human, blue/gray) and ACTIVE_TAB (agent, pink).
 const BASE_THEME = {
   colors: {
     frame: "#0d1117",
@@ -438,6 +477,7 @@ const ACTIVE_TAB_THEME = {
   },
 };
 
+// [6] Pink bar injected into agent-touched tabs. [8] Dismissed on user interaction.
 const BAR_INJECT_JS = `(function(){
     var e=document.getElementById('browse-agent-bar');
     if(e)return;
@@ -479,18 +519,21 @@ let injectedTs = {};  // {tabId: serverTimestamp} — tracks what we last inject
 let dismissedTabs = new Set();  // tabs where user dismissed the bar
 let onAgentTab = false;  // is the user currently viewing an agent-marked tab
 
+// [7] Apply theme based on whether user is viewing an agent-touched tab.
 function applyTheme() {
   browser.theme.update(onAgentTab ? ACTIVE_TAB_THEME : BASE_THEME);
 }
 
-// Apply base theme immediately on load
+// [7] Apply base theme immediately on load.
 applyTheme();
 
+// [7] Swap theme when user switches tabs.
 browser.tabs.onActivated.addListener(async (activeInfo) => {
   onAgentTab = !!injectedTs[activeInfo.tabId] && !dismissedTabs.has(activeInfo.tabId);
   applyTheme();
 });
 
+// [8] User dismissed the bar — swap theme back to base.
 browser.runtime.onMessage.addListener((msg, sender) => {
   if (msg.type === 'bar-dismissed' && sender.tab) {
     dismissedTabs.add(sender.tab.id);
@@ -560,7 +603,7 @@ async function poll() {
   }
 }
 
-// Re-inject bar after page loads on tracked tabs
+// [9] Re-inject bar after page loads (navigations destroy the DOM).
 browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === "complete" && injectedTs[tabId] && !dismissedTabs.has(tabId)) {
     try {
