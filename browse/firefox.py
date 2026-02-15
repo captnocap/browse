@@ -331,8 +331,10 @@ _CHROME_CSS = """
 }
 
 /* [10] Per-tab agent indicator — styled via browse-agent attribute on XUL tab elements.
-   Set by session.py _mark_agent_tab(), cleared on 10 min expiry.
-   Works on both active and inactive tabs in the tab strip. */
+   Set by session.py _mark_agent_tab(), cleared on dismissal or 10 min expiry.
+   Two states: "active" (agent live, pulsing) and "true" (agent touched, static). */
+
+/* Static pink — agent touched this tab but is idle */
 tab[browse-agent="true"] .tab-background {
   background: rgba(255, 0, 170, 0.12) !important;
   outline: 1px solid rgba(255, 0, 170, 0.35) !important;
@@ -348,6 +350,35 @@ tab[browse-agent="true"] .tab-line {
 tab[browse-agent="true"][selected] .tab-background {
   background: rgba(255, 0, 170, 0.2) !important;
   outline: 1px solid rgba(255, 0, 170, 0.5) !important;
+}
+
+/* Pulsing pink — agent is actively working on this tab */
+@keyframes browse-tab-pulse {
+  0%, 100% {
+    background: rgba(255, 0, 170, 0.12);
+    outline-color: rgba(255, 0, 170, 0.35);
+  }
+  50% {
+    background: rgba(255, 0, 170, 0.3);
+    outline-color: rgba(255, 0, 170, 0.7);
+  }
+}
+
+tab[browse-agent="active"] .tab-background {
+  outline: 1px solid rgba(255, 0, 170, 0.7) !important;
+  outline-offset: -1px;
+  animation: browse-tab-pulse 1s ease-in-out infinite !important;
+}
+
+tab[browse-agent="active"] .tab-line {
+  background-color: #ff00aa !important;
+  opacity: 1 !important;
+  height: 3px !important;
+}
+
+tab[browse-agent="active"][selected] .tab-background {
+  outline: 1px solid rgba(255, 0, 170, 0.8) !important;
+  animation: browse-tab-pulse 1s ease-in-out infinite !important;
 }
 
 """

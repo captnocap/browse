@@ -537,12 +537,20 @@ browser.tabs.onActivated.addListener(async (activeInfo) => {
   applyTheme();
 });
 
-// [8] User dismissed the bar — swap theme back to base.
-browser.runtime.onMessage.addListener((msg, sender) => {
+// [8] User dismissed the bar — swap theme back to base and clear [10] tab attribute.
+browser.runtime.onMessage.addListener(async (msg, sender) => {
   if (msg.type === 'bar-dismissed' && sender.tab) {
     dismissedTabs.add(sender.tab.id);
     onAgentTab = false;
     applyTheme();
+    // Tell session server to clear the browse-agent attribute on the XUL tab
+    try {
+      await fetch("http://127.0.0.1:" + STATUS_PORT + "/", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({dismiss_tab: sender.tab.index}),
+      });
+    } catch(e) {}
   }
 });
 

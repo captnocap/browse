@@ -202,11 +202,26 @@ class SessionServer:
             handles = self.driver.window_handles
             idx = handles.index(self.driver.current_window_handle)
             self._agent_bar_tabs[idx] = time.time()
-            # [10] Stamp the actual tab element in chrome context for tab strip styling
+            self._pulse_agent_tab(idx)
+        except Exception:
+            pass
+
+    def _pulse_agent_tab(self, idx):
+        """[10] Set browse-agent="active" on a tab with 5s auto-downgrade to "true".
+        "active" = agent is live on this tab (pulsing CSS).
+        "true" = agent touched this tab but is idle (static pink CSS)."""
+        try:
             with self.driver.context(self.driver.CONTEXT_CHROME):
                 self.driver.execute_script('''
                     let tab = gBrowser.tabs[arguments[0]];
-                    if (tab) tab.setAttribute("browse-agent", "true");
+                    if (!tab) return;
+                    tab.setAttribute("browse-agent", "active");
+                    // Clear any existing downgrade timer
+                    if (tab._browseAgentTimer) clearTimeout(tab._browseAgentTimer);
+                    tab._browseAgentTimer = setTimeout(() => {
+                        if (tab.getAttribute("browse-agent") === "active")
+                            tab.setAttribute("browse-agent", "true");
+                    }, 5000);
                 ''', idx)
         except Exception:
             pass
@@ -215,6 +230,18 @@ class SessionServer:
         """Execute a command on the browser. Returns a JSON-serializable result."""
         action = cmd.get("cmd")
         self._last_command_time = time.time()
+
+        # [10] Pulse the active tab on any command that touches page content
+        _TAB_COMMANDS = {"navigate", "click", "type_text", "back", "forward",
+                         "refresh", "extract_content", "execute_js", "screenshot"}
+        if action in _TAB_COMMANDS:
+            try:
+                handles = self.driver.window_handles
+                idx = handles.index(self.driver.current_window_handle)
+                if idx in self._agent_bar_tabs:
+                    self._pulse_agent_tab(idx)
+            except Exception:
+                pass
 
         if action == "navigate":
             self.driver.set_page_load_timeout(cmd.get("timeout", 30))
@@ -374,6 +401,13 @@ class SessionServer:
                     ' Services.scriptSecurityManager.getSystemPrincipal()});',
                     url,
                 )
+            # Mark the new tab (last one) as agent-touched
+            try:
+                new_idx = len(self.driver.window_handles) - 1
+                self._agent_bar_tabs[new_idx] = time.time()
+                self._pulse_agent_tab(new_idx)
+            except Exception:
+                pass
             # Return updated tab list
             return self.handle_command({"cmd": "list_tabs"})
 
@@ -492,6 +526,39 @@ class SessionServer:
                     "tab_count": tab_count,
                     "bar_tabs": bar_tabs,
                 }).encode())
+
+            def do_POST(self):
+                """Handle tab dismissal from the indicator extension."""
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    body = json.loads(self.rfile.read(length))
+                    tab_idx = body.get("dismiss_tab")
+                    if tab_idx is not None:
+                        tab_idx = int(tab_idx)
+                        session_server._agent_bar_tabs.pop(tab_idx, None)
+                        try:
+                            with session_server.driver.context(session_server.driver.CONTEXT_CHROME):
+                                session_server.driver.execute_script('''
+                                    let tab = gBrowser.tabs[arguments[0]];
+                                    if (tab) tab.removeAttribute("browse-agent");
+                                ''', tab_idx)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                self.send_response(200)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"ok":true}')
+
+            def do_OPTIONS(self):
+                """CORS preflight for POST requests."""
+                self.send_response(200)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type")
+                self.end_headers()
 
             def log_message(self, *args):
                 pass
