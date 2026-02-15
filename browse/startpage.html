@@ -309,12 +309,15 @@
       var history = data.history || [];
 
       // Update status pill
-      if (count > 0) {
+      var active = data.active === true;
+      var tabCount = data.tab_count || 0;
+      var tabSuffix = tabCount > 0 ? " \u00b7 " + tabCount + " tab" + (tabCount > 1 ? "s" : "") : "";
+      if (active) {
         statusEl.className = "status active";
-        statusText.textContent = count + " agent" + (count > 1 ? "s" : "") + " connected";
+        statusText.textContent = "Agent active" + tabSuffix;
       } else {
         statusEl.className = "status idle";
-        statusText.textContent = "No agents connected";
+        statusText.textContent = "Idle" + tabSuffix;
       }
 
       // Render new entries only

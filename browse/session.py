@@ -51,8 +51,10 @@ class SessionServer:
         self._running = False
         self._client_count = 0
         self._history = []
-        self._last_url = None
-        self._agent_navigating = False
+        self._last_watched_url = None
+        self._last_agent_url = None
+        self._last_command_time = 0
+        self._agent_bar_tabs = {}  # {tab_index: expiry_timestamp}
 
     CHALLENGE_URL_PATTERNS = [
         ("/sorry/", "google_captcha"),
@@ -145,47 +147,76 @@ class SessionServer:
             self._history = self._history[-200:]
 
     def _watch_url(self):
-        """Poll for human-initiated URL changes in a daemon thread."""
+        """Poll for human-initiated URL changes in a daemon thread.
+
+        Uses chrome context to read the user's actual visual tab,
+        independent of where Selenium's context is pointed.
+        """
         while self._running:
             time.sleep(1.5)
+            if not self.lock.acquire(timeout=0.1):
+                continue
             try:
-                url = self.driver.current_url
+                with self.driver.context(self.driver.CONTEXT_CHROME):
+                    info = self.driver.execute_script('''
+                        let tab = gBrowser.selectedTab;
+                        let browser = gBrowser.getBrowserForTab(tab);
+                        return {url: browser.currentURI.spec, title: tab.label};
+                    ''')
+                url = info['url']
+                title = info['title']
             except Exception:
                 continue
-            if url == self._last_url:
+            finally:
+                self.lock.release()
+            if url == self._last_watched_url:
                 continue
-            if self._agent_navigating:
-                self._last_url = url
-                continue
+            self._last_watched_url = url
             if url.startswith("about:") or url.startswith("file://"):
-                self._last_url = url
                 continue
-            try:
-                title = self.driver.title
-            except Exception:
-                title = ""
-            self._last_url = url
+            if url == self._last_agent_url:
+                self._last_agent_url = None
+                continue
             self._append_history("human", url, title)
+
+    def _signal_activity(self):
+        """Set the URL bar glow with a 30s auto-clear timeout."""
+        try:
+            with self.driver.context(self.driver.CONTEXT_CHROME):
+                self.driver.execute_script('''
+                    if (window._browseAgentTimer) clearTimeout(window._browseAgentTimer);
+                    document.documentElement.setAttribute("browseagent", "true");
+                    window._browseAgentTimer = setTimeout(() => {
+                        document.documentElement.removeAttribute("browseagent");
+                    }, 30000);
+                ''')
+        except Exception:
+            pass
+
+    def _mark_agent_tab(self):
+        """Record the current Selenium-targeted tab for the extension to highlight."""
+        try:
+            handles = self.driver.window_handles
+            idx = handles.index(self.driver.current_window_handle)
+            self._agent_bar_tabs[idx] = time.time()
+        except Exception:
+            pass
 
     def handle_command(self, cmd):
         """Execute a command on the browser. Returns a JSON-serializable result."""
         action = cmd.get("cmd")
+        self._last_command_time = time.time()
 
         if action == "navigate":
-            self._agent_navigating = True
-            try:
-                self.driver.set_page_load_timeout(cmd.get("timeout", 30))
-                self.driver.get(cmd["url"])
-                challenge = self.detect_challenge()
-                if challenge:
-                    self._last_url = self.driver.current_url
-                    return {"challenge": challenge, "url": self.driver.current_url}
-                content = self._wait_for_stable_content()
-                self._append_history("agent", content.url, content.title)
-                self._last_url = self.driver.current_url
-                return self._content_to_dict(content)
-            finally:
-                self._agent_navigating = False
+            self.driver.set_page_load_timeout(cmd.get("timeout", 30))
+            self.driver.get(cmd["url"])
+            challenge = self.detect_challenge()
+            if challenge:
+                return {"challenge": challenge, "url": self.driver.current_url}
+            content = self._wait_for_stable_content()
+            self._append_history("agent", content.url, content.title)
+            self._last_agent_url = content.url
+            return self._content_to_dict(content)
 
         elif action == "check_challenge":
             challenge = self.detect_challenge()
@@ -251,36 +282,91 @@ class SessionServer:
             return self.driver.page_source
 
         elif action == "back":
-            self._agent_navigating = True
-            try:
-                self.driver.back()
-                time.sleep(0.3)
-                url = self.driver.current_url
-                title = self.driver.title
-                if not url.startswith("about:") and not url.startswith("file://"):
-                    self._append_history("agent", url, title)
-                self._last_url = url
-                return True
-            finally:
-                self._agent_navigating = False
+            self.driver.back()
+            time.sleep(0.3)
+            url = self.driver.current_url
+            title = self.driver.title
+            if not url.startswith("about:") and not url.startswith("file://"):
+                self._append_history("agent", url, title)
+                self._last_agent_url = url
+            return True
 
         elif action == "forward":
-            self._agent_navigating = True
-            try:
-                self.driver.forward()
-                time.sleep(0.3)
-                url = self.driver.current_url
-                title = self.driver.title
-                if not url.startswith("about:") and not url.startswith("file://"):
-                    self._append_history("agent", url, title)
-                self._last_url = url
-                return True
-            finally:
-                self._agent_navigating = False
+            self.driver.forward()
+            time.sleep(0.3)
+            url = self.driver.current_url
+            title = self.driver.title
+            if not url.startswith("about:") and not url.startswith("file://"):
+                self._append_history("agent", url, title)
+                self._last_agent_url = url
+            return True
 
         elif action == "refresh":
             self.driver.refresh()
             return True
+
+        elif action == "list_tabs":
+            with self.driver.context(self.driver.CONTEXT_CHROME):
+                tabs = self.driver.execute_script('''
+                    let result = [];
+                    let activeTab = gBrowser.selectedTab;
+                    for (let i = 0; i < gBrowser.tabs.length; i++) {
+                        let tab = gBrowser.tabs[i];
+                        let browser = gBrowser.getBrowserForTab(tab);
+                        result.push({
+                            index: i,
+                            url: browser.currentURI.spec,
+                            title: tab.label,
+                            active: tab === activeTab
+                        });
+                    }
+                    return result;
+                ''')
+            return {"tabs": tabs}
+
+        elif action == "use_tab":
+            index = cmd["index"]
+            handles = self.driver.window_handles
+            if index >= len(handles):
+                raise ValueError(
+                    f"Tab index {index} out of range ({len(handles)} tabs open)")
+            # Save user's current visual tab
+            with self.driver.context(self.driver.CONTEXT_CHROME):
+                user_idx = self.driver.execute_script(
+                    'return Array.from(gBrowser.tabs).indexOf(gBrowser.selectedTab);'
+                )
+            # Point Selenium at the target tab
+            self.driver.switch_to.window(handles[index])
+            # Restore user's visual tab (no hop)
+            with self.driver.context(self.driver.CONTEXT_CHROME):
+                self.driver.execute_script(
+                    'gBrowser.selectedTab = gBrowser.tabs[arguments[0]];',
+                    user_idx,
+                )
+            # Inject agent bar on the targeted tab
+            self._mark_agent_tab()
+            # Return info about it
+            with self.driver.context(self.driver.CONTEXT_CHROME):
+                info = self.driver.execute_script('''
+                    let tab = gBrowser.tabs[arguments[0]];
+                    let browser = gBrowser.getBrowserForTab(tab);
+                    return {index: arguments[0],
+                            url: browser.currentURI.spec,
+                            title: tab.label};
+                ''', index)
+            return info
+
+        elif action == "open_tab":
+            url = cmd.get("url", "about:blank")
+            with self.driver.context(self.driver.CONTEXT_CHROME):
+                self.driver.execute_script(
+                    'gBrowser.addTab(arguments[0], {inBackground: true,'
+                    ' triggeringPrincipal:'
+                    ' Services.scriptSecurityManager.getSystemPrincipal()});',
+                    url,
+                )
+            # Return updated tab list
+            return self.handle_command({"cmd": "list_tabs"})
 
         elif action == "ping":
             return "pong"
@@ -292,26 +378,9 @@ class SessionServer:
     def client_count(self):
         return self._client_count
 
-    def _update_indicator(self):
-        """Toggle the browseagent attribute on the browser chrome root element."""
-        connected = self._client_count > 0
-        try:
-            with self.driver.context(self.driver.CONTEXT_CHROME):
-                if connected:
-                    self.driver.execute_script(
-                        'document.documentElement.setAttribute("browseagent", "true");'
-                    )
-                else:
-                    self.driver.execute_script(
-                        'document.documentElement.removeAttribute("browseagent");'
-                    )
-        except Exception:
-            pass
-
     def _handle_client(self, conn, addr):
         """Handle one client connection. Reads JSON lines, sends responses."""
         self._client_count += 1
-        self._update_indicator()
         try:
             with conn:
                 buf = b""
@@ -346,7 +415,6 @@ class SessionServer:
                         break
         finally:
             self._client_count -= 1
-            self._update_indicator()
 
     def serve(self):
         """Start the command server. Blocks until shutdown."""
@@ -386,9 +454,22 @@ class SessionServer:
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
+                try:
+                    tab_count = len(session_server.driver.window_handles)
+                except Exception:
+                    tab_count = 0
+                active = (time.time() - session_server._last_command_time) < 30
+                now = time.time()
+                # Clean up entries older than 10 min
+                bar_tabs = {str(i): ts for i, ts in
+                            session_server._agent_bar_tabs.items()
+                            if now - ts < 600}
                 self.wfile.write(json.dumps({
                     "agents": session_server.client_count,
+                    "active": active,
                     "history": session_server._history,
+                    "tab_count": tab_count,
+                    "bar_tabs": bar_tabs,
                 }).encode())
 
             def log_message(self, *args):

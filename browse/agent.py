@@ -285,6 +285,85 @@ class AgentBrowser:
             return self._client.send({"cmd": "page_source"})
         return self._driver.page_source
 
+    def list_tabs(self):
+        """List all open tabs with their index, URL, title, and active flag.
+
+        Uses Firefox chrome context to read tab info without switching,
+        so it won't disrupt the user's currently focused tab.
+        """
+        if self._is_session_mode:
+            return self._client.send({"cmd": "list_tabs"})
+        else:
+            with self._driver.context(self._driver.CONTEXT_CHROME):
+                tabs = self._driver.execute_script('''
+                    let result = [];
+                    let activeTab = gBrowser.selectedTab;
+                    for (let i = 0; i < gBrowser.tabs.length; i++) {
+                        let tab = gBrowser.tabs[i];
+                        let browser = gBrowser.getBrowserForTab(tab);
+                        result.push({
+                            index: i,
+                            url: browser.currentURI.spec,
+                            title: tab.label,
+                            active: tab === activeTab
+                        });
+                    }
+                    return result;
+                ''')
+            return {"tabs": tabs}
+
+    def use_tab(self, index):
+        """Silently target a tab by index without changing the user's view.
+
+        Selenium commands will go to this tab, but the user's visible
+        tab stays unchanged. Call list_tabs() to see available indices.
+        """
+        if self._is_session_mode:
+            return self._client.send({"cmd": "use_tab", "index": index})
+        else:
+            handles = self._driver.window_handles
+            if index >= len(handles):
+                raise ValueError(
+                    f"Tab index {index} out of range ({len(handles)} tabs open)")
+            with self._driver.context(self._driver.CONTEXT_CHROME):
+                user_idx = self._driver.execute_script(
+                    'return Array.from(gBrowser.tabs).indexOf(gBrowser.selectedTab);'
+                )
+            self._driver.switch_to.window(handles[index])
+            with self._driver.context(self._driver.CONTEXT_CHROME):
+                self._driver.execute_script(
+                    'gBrowser.selectedTab = gBrowser.tabs[arguments[0]];',
+                    user_idx,
+                )
+            with self._driver.context(self._driver.CONTEXT_CHROME):
+                info = self._driver.execute_script('''
+                    let tab = gBrowser.tabs[arguments[0]];
+                    let browser = gBrowser.getBrowserForTab(tab);
+                    return {index: arguments[0],
+                            url: browser.currentURI.spec,
+                            title: tab.label};
+                ''', index)
+            return info
+
+    def open_tab(self, url=None):
+        """Open a new background tab without stealing the user's focus.
+
+        Returns the updated tab list (same format as list_tabs).
+        """
+        if self._is_session_mode:
+            return self._client.send(
+                {"cmd": "open_tab", "url": url or "about:blank"})
+        else:
+            target = url or "about:blank"
+            with self._driver.context(self._driver.CONTEXT_CHROME):
+                self._driver.execute_script(
+                    'gBrowser.addTab(arguments[0], {inBackground: true,'
+                    ' triggeringPrincipal:'
+                    ' Services.scriptSecurityManager.getSystemPrincipal()});',
+                    target,
+                )
+            return self.list_tabs()
+
     def back(self):
         """Navigate back."""
         if self._is_session_mode:

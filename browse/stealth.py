@@ -184,27 +184,32 @@ _REMOTE_CONTROL_CSS_NEW = """:root[remotecontrol] {
 /* Browse agent indicator — controlled by browseagent attribute on root */
 @keyframes agent-pulse {
   0%, 100% {
-    box-shadow: 0 0 8px #00ff88, 0 0 3px #00ff88 inset;
-    border-color: #00ff88;
+    box-shadow: 0 0 8px #ff00aa, 0 0 3px #ff00aa inset;
+    border-color: #ff00aa;
   }
   50% {
-    box-shadow: 0 0 14px #00ffaa, 0 0 5px #00ffaa inset;
-    border-color: #00ffaa;
+    box-shadow: 0 0 14px #ff22bb, 0 0 5px #ff22bb inset;
+    border-color: #ff22bb;
   }
 }
 
 :root[browseagent] #urlbar-background {
-  border: 2px solid #00ff88 !important;
-  box-shadow: 0 0 8px #00ff88, 0 0 3px #00ff88 inset !important;
+  border: 2px solid #ff00aa !important;
+  box-shadow: 0 0 8px #ff00aa, 0 0 3px #ff00aa inset !important;
   animation: agent-pulse 2s ease-in-out infinite !important;
 }
 
 :root[browseagent] #navigator-toolbox {
-  border-bottom: 1px solid #00ff8855 !important;
+  border-bottom: none !important;
 }
 
-/* ─── Per-agent tab coloring ─────────────────────────────────────────── */
-/* Each agent's tab gets a browseagent-color attribute set from chrome JS */
+/* ─── Per-tab agent activity ─────────────────────────────────────────── */
+/* Tabs get browseagent-color attribute via chrome JS when agent touches them */
+
+@keyframes agent-tab-pulse {
+  0%, 100% { box-shadow: 0 0 4px #00ff88; opacity: 0.8; }
+  50% { box-shadow: 0 0 10px #00ff88; opacity: 1; }
+}
 
 .tabbrowser-tab[browseagent-color="green"] > .tab-stack > .tab-background {
   background: linear-gradient(to bottom, rgba(0,255,136,0.18), transparent) !important;
@@ -214,6 +219,7 @@ _REMOTE_CONTROL_CSS_NEW = """:root[remotecontrol] {
   display: block !important;
   opacity: 1 !important;
   height: 3px !important;
+  animation: agent-tab-pulse 2s ease-in-out infinite !important;
 }
 
 .tabbrowser-tab[browseagent-color="blue"] > .tab-stack > .tab-background {
@@ -490,7 +496,7 @@ _INDICATOR_MANIFEST = {
     "name": "Browse Agent Indicator",
     "version": "1.0",
     "description": "Shows when AI agents are connected to the browser",
-    "permissions": ["theme"],
+    "permissions": ["theme", "tabs", "<all_urls>"],
     "browser_specific_settings": {
         "gecko": {
             "id": "browse-indicator@localhost",
@@ -508,67 +514,172 @@ _INDICATOR_SCRIPT = """
 const POLL_MS = 1000;
 const STATUS_PORT = __STATUS_PORT__;
 
-const AGENT_THEME = {
+const BASE_THEME = {
   colors: {
     frame: "#0d1117",
     tab_background_text: "#c9d1d9",
     toolbar: "#161b22",
     toolbar_field: "#0d1117",
-    toolbar_field_border: "#00ff88",
-    toolbar_field_border_focus: "#00ff88",
+    toolbar_field_border: "#30363d",
+    toolbar_field_border_focus: "#58a6ff",
     toolbar_field_text: "#c9d1d9",
-    toolbar_bottom_separator: "#00ff88",
+    toolbar_bottom_separator: "transparent",
+    tab_line: "#58a6ff",
     popup: "#161b22",
     popup_text: "#c9d1d9",
-    popup_border: "#00ff88",
-    tab_line: "#00ff88",
-    tab_loading: "#00ff88",
+    popup_border: "#30363d",
   },
 };
 
-// Pulsing: alternate between bright and dim glow
-const AGENT_THEME_DIM = {
+// Agent is active — pink address bar border + pink tab line
+const ACTIVE_THEME = {
   colors: {
-    ...AGENT_THEME.colors,
-    toolbar_field_border: "#00cc6a",
-    toolbar_field_border_focus: "#00cc6a",
-    toolbar_bottom_separator: "#00cc6a",
-    tab_line: "#00cc6a",
-    tab_loading: "#00cc6a",
+    ...BASE_THEME.colors,
+    toolbar_field_border: "#ff00aa",
+    toolbar_field_border_focus: "#ff00aa",
+    popup_border: "#ff00aa",
+    tab_line: "#ff00aa",
   },
 };
 
-let lastCount = 0;
-let pulse = false;
+// Viewing an agent-touched tab — pink border + pink separator
+const ACTIVE_TAB_THEME = {
+  colors: {
+    ...ACTIVE_THEME.colors,
+    toolbar_bottom_separator: "#ff00aa",
+  },
+};
+
+const BAR_INJECT_JS = `(function(){
+    var e=document.getElementById('browse-agent-bar');
+    if(e)return;
+    var b=document.createElement('div');
+    b.id='browse-agent-bar';
+    b.style.cssText='position:fixed;top:0;left:0;right:0;height:4px;'
+        +'background:#ff00aa;z-index:2147483647;pointer-events:none;'
+        +'box-shadow:0 0 10px #ff00aa;'
+        +'animation:browse-agent-pulse 2s ease-in-out infinite;';
+    var style=document.getElementById('browse-agent-style');
+    if(!style){
+        style=document.createElement('style');
+        style.id='browse-agent-style';
+        style.textContent='@keyframes browse-agent-pulse{'
+            +'0%,100%{opacity:0.7;box-shadow:0 0 6px #ff00aa;}'
+            +'50%{opacity:1;box-shadow:0 0 14px #ff00aa;}}';
+        document.head.appendChild(style);
+    }
+    if(document.body)document.body.prepend(b);
+    function dismiss(){
+        var el=document.getElementById('browse-agent-bar');
+        if(el)el.remove();
+        document.removeEventListener('click',dismiss);
+        document.removeEventListener('keydown',dismiss);
+        document.removeEventListener('scroll',dismiss,true);
+        try{browser.runtime.sendMessage({type:'bar-dismissed'});}catch(e){}
+    }
+    document.addEventListener('click',dismiss,{once:true});
+    document.addEventListener('keydown',dismiss,{once:true});
+    document.addEventListener('scroll',dismiss,{once:true,capture:true});
+})();`;
+
+const BAR_REMOVE_JS = `(function(){
+    var e=document.getElementById('browse-agent-bar');
+    if(e)e.remove();
+})();`;
+
+let injectedTs = {};  // {tabId: serverTimestamp} — tracks what we last injected
+let dismissedTabs = new Set();  // tabs where user dismissed the bar
+let onAgentTab = false;  // is the user currently viewing an agent-marked tab
+
+function applyTheme() {
+  browser.theme.update(onAgentTab ? ACTIVE_TAB_THEME : BASE_THEME);
+}
+
+// Apply base theme immediately on load
+applyTheme();
+
+browser.tabs.onActivated.addListener(async (activeInfo) => {
+  onAgentTab = !!injectedTs[activeInfo.tabId] && !dismissedTabs.has(activeInfo.tabId);
+  applyTheme();
+});
+
+browser.runtime.onMessage.addListener((msg, sender) => {
+  if (msg.type === 'bar-dismissed' && sender.tab) {
+    dismissedTabs.add(sender.tab.id);
+    onAgentTab = false;
+    applyTheme();
+  }
+});
 
 async function poll() {
   try {
     const resp = await fetch("http://127.0.0.1:" + STATUS_PORT + "/");
     const data = await resp.json();
-    const count = data.agents || 0;
+    const active = data.active === true;
+    const barTabs = data.bar_tabs || {};
 
-    if (count > 0) {
-      // Pulse between bright and dim green
-      pulse = !pulse;
-      browser.theme.update(pulse ? AGENT_THEME : AGENT_THEME_DIM);
-      browser.browserAction.setBadgeText({ text: String(count) });
-      browser.browserAction.setBadgeBackgroundColor({ color: "#00ff88" });
+    // Badge
+    if (active) {
+      browser.browserAction.setBadgeText({ text: "\\u25CF" });
+      browser.browserAction.setBadgeBackgroundColor({ color: "#ff00aa" });
       browser.browserAction.setBadgeTextColor({ color: "#000000" });
-    } else if (count === 0 && lastCount > 0) {
-      browser.theme.reset();
+    } else {
       browser.browserAction.setBadgeText({ text: "" });
     }
 
-    lastCount = count;
-  } catch (e) {
-    // Status server not reachable
-    if (lastCount > 0) {
-      browser.theme.reset();
-      browser.browserAction.setBadgeText({ text: "" });
-      lastCount = 0;
+    // Per-tab agent bar via extension tabs API
+    const allTabs = await browser.tabs.query({});
+    const wantIds = new Set();
+
+    for (const [idxStr, serverTs] of Object.entries(barTabs)) {
+      const idx = parseInt(idxStr);
+      const tab = allTabs.find(t => t.index === idx);
+      if (!tab) continue;
+      wantIds.add(tab.id);
+
+      // Agent touched tab again (newer timestamp) — clear dismissal
+      if (injectedTs[tab.id] && serverTs > injectedTs[tab.id]) {
+        dismissedTabs.delete(tab.id);
+      }
+
+      // Only inject if not dismissed and agent touched it
+      if (!dismissedTabs.has(tab.id) && (!injectedTs[tab.id] || serverTs > injectedTs[tab.id])) {
+        try {
+          await browser.tabs.executeScript(tab.id, { code: BAR_INJECT_JS });
+        } catch(e) {}
+        injectedTs[tab.id] = serverTs;
+        // Update theme if user is currently viewing this tab
+        if (tab.active) {
+          onAgentTab = true;
+          applyTheme();
+        }
+      }
     }
+
+    // Remove bar from tabs no longer tracked by server (e.g. 10 min cleanup)
+    for (const tabId of Object.keys(injectedTs)) {
+      if (!wantIds.has(parseInt(tabId))) {
+        try {
+          await browser.tabs.executeScript(parseInt(tabId), { code: BAR_REMOVE_JS });
+        } catch(e) {}
+        delete injectedTs[tabId];
+      }
+    }
+
+  } catch (e) {
+    // Status server unreachable — keep theme, just clear badge
+    browser.browserAction.setBadgeText({ text: "" });
   }
 }
+
+// Re-inject bar after page loads on tracked tabs
+browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === "complete" && injectedTs[tabId] && !dismissedTabs.has(tabId)) {
+    try {
+      browser.tabs.executeScript(tabId, { code: BAR_INJECT_JS });
+    } catch(e) {}
+  }
+});
 
 setInterval(poll, POLL_MS);
 poll();
