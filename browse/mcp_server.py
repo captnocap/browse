@@ -47,6 +47,21 @@ mcp = FastMCP(
 # these freely in the session — this only restricts agent-initiated navigation.
 # Configured via BLOCKED_SITES in browse.conf (comma-separated domains).
 
+def _downscale_png(png_b64, max_width=1024):
+    """Downscale a base64-encoded PNG to max_width, preserving aspect ratio."""
+    import io
+    from PIL import Image
+    raw = base64.b64decode(png_b64)
+    img = Image.open(io.BytesIO(raw))
+    if img.width > max_width:
+        ratio = max_width / img.width
+        new_size = (max_width, int(img.height * ratio))
+        img = img.resize(new_size, Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
 def _load_blocklist():
     """Load blocked domains from browse.conf."""
     conf_path = os.path.join(
@@ -99,19 +114,37 @@ def _new_id():
 
 
 def _get_browser(browser_id=None):
-    """Get a browser by ID. If None, returns the most recently created one."""
+    """Get a browser by ID. If None, prefers session browsers over quick ones."""
     if not _browsers:
         raise RuntimeError(
             "No browser open. Use browse_open to launch one, "
             "or browse_connect to join a session."
         )
     if browser_id is None:
-        browser_id = max(_browsers.keys(), key=int)
+        # Prefer session browsers — they represent the user's browser
+        session_ids = [bid for bid, b in _browsers.items() if b["mode"] == "session"]
+        if session_ids:
+            browser_id = max(session_ids, key=int)
+        else:
+            browser_id = max(_browsers.keys(), key=int)
     if browser_id not in _browsers:
         raise RuntimeError(
             f"Browser {browser_id} not found. "
             f"Active browsers: {', '.join(_browsers.keys())}"
         )
+    # Auto-reconnect dead session connections
+    browser = _browsers[browser_id]
+    if browser["mode"] == "session":
+        try:
+            browser["client"].send({"cmd": "ping"})
+        except Exception:
+            session = get_session_info()
+            if session:
+                client = SessionClient(port=session["port"])
+                client.send({"cmd": "ping"})
+                browser["client"] = client
+            else:
+                raise RuntimeError("Session is no longer running.")
     return browser_id, _browsers[browser_id]
 
 
@@ -501,6 +534,9 @@ def browse_screenshot(browser_id: str = "") -> list:
     else:
         png_b64 = base64.b64encode(browser["driver"].get_screenshot_as_png()).decode()
         url = browser["driver"].current_url
+
+    # Scale down to reduce context window usage
+    png_b64 = _downscale_png(png_b64, max_width=1024)
 
     return [
         TextContent(type="text", text=f"[Browser {bid}] Screenshot of: {url}"),
