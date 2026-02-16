@@ -1,0 +1,38 @@
+{
+  "topic": "Consumer AI Agents in 2026: What's Real vs. What's Hype",
+  "date": "2026-02-12",
+  "total_time_seconds": 437,
+  "total_time_human": "7m 17s",
+  "phases": {
+    "research": {
+      "duration": "~2m 20s",
+      "agents": 10,
+      "breakdown": {
+        "websearch_agents": 7,
+        "browse_agents": 2,
+        "mixed_agents": 1
+      }
+    },
+    "synthesis": {
+      "duration": "~4m",
+      "agents": 1
+    }
+  },
+  "angles": [
+    {"id": 1, "name": "Freshness", "type": "websearch", "file": "01_freshness.md"},
+    {"id": 2, "name": "Technical State of Art", "type": "websearch", "file": "02_technical.md"},
+    {"id": 3, "name": "Market Reality", "type": "websearch", "file": "03_market.md"},
+    {"id": 4, "name": "Regulation & Policy", "type": "websearch", "file": "04_regulation.md"},
+    {"id": 5, "name": "Security & Abuse", "type": "websearch", "file": "05_security.md"},
+    {"id": 6, "name": "Ethics & Societal Impact", "type": "websearch", "file": "06_ethics.md"},
+    {"id": 7, "name": "Key Players & Incentives", "type": "websearch", "file": "07_players.md"},
+    {"id": 8, "name": "Critical Failures", "type": "browse", "file": "08_failures.md"},
+    {"id": 9, "name": "Contrarian View", "type": "browse", "file": "09_contrarian.md"},
+    {"id": 10, "name": "Predictions", "type": "mixed", "file": "10_predictions.md"}
+  ],
+  "outputs": {
+    "synthesis": "synthesis.md",
+    "sources": "sources.md",
+    "total_sources": 87
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "topic": "Firefox tab coloring per-agent and preventing tab focus hopping in multi-agent browser automation (Tor Browser)",
+  "date": "2026-02-12",
+  "total_time_seconds": 1426,
+  "total_time_human": "23m 46s",
+  "phases": {
+    "research": {
+      "duration": "~20m",
+      "agents": 10,
+      "breakdown": {
+        "websearch_agents": 7,
+        "browse_agents": 2,
+        "mixed_agents": 1
+      }
+    },
+    "synthesis": {
+      "duration": "~4m",
+      "agents": 1
+    }
+  },
+  "angles": [
+    {"id": 1, "name": "gBrowser Tab API", "type": "websearch", "file": "01_gBrowser_tab_api.md"},
+    {"id": 2, "name": "Tab CSS Architecture", "type": "websearch", "file": "02_tab_css_architecture.md"},
+    {"id": 3, "name": "WebExtension Theme API", "type": "websearch", "file": "03_webextension_theme_api.md"},
+    {"id": 4, "name": "Container Tabs Coloring", "type": "websearch", "file": "04_container_tabs_coloring.md"},
+    {"id": 5, "name": "Selenium/Marionette Focus", "type": "websearch", "file": "05_selenium_marionette_focus.md"},
+    {"id": 6, "name": "WebExtension tabs API", "type": "websearch", "file": "06_webextension_tabs_api.md"},
+    {"id": 7, "name": "userChrome.css Techniques", "type": "websearch", "file": "07_userchrome_css_techniques.md"},
+    {"id": 8, "name": "Known Failures and Issues", "type": "browse", "file": "08_known_failures.md"},
+    {"id": 9, "name": "Contrarian: Skeptical Critique", "type": "browse", "file": "09_contrarian.md"},
+    {"id": 10, "name": "Integration Strategy", "type": "mixed", "file": "10_integration_strategy.md"}
+  ],
+  "outputs": {
+    "synthesis": "synthesis.md",
+    "sources": "sources.md",
+    "total_sources": 146
+  }
+}
