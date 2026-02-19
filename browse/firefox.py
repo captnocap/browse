@@ -11,6 +11,7 @@ restriction, timer clamping, letterboxing — but the anonymity set is
 
 import json
 import os
+import sys
 from time import sleep
 
 from selenium import webdriver
@@ -104,14 +105,34 @@ def _read_conf():
     return conf
 
 
+def _platform_firefox_defaults():
+    """Return platform-specific default Firefox installation paths to probe."""
+    if sys.platform == "darwin":
+        return [
+            "/Applications/Firefox.app/Contents/MacOS",
+            os.path.expanduser("~/Applications/Firefox.app/Contents/MacOS"),
+            # Firefox ESR
+            "/Applications/Firefox ESR.app/Contents/MacOS",
+        ]
+    elif sys.platform == "win32":
+        return [
+            r"C:\Program Files\Mozilla Firefox",
+            r"C:\Program Files (x86)\Mozilla Firefox",
+        ]
+    else:
+        # Linux: no standard install path — rely on config/env
+        return []
+
+
 def find_firefox_path():
-    """Locate the Firefox binary directory from config or environment.
+    """Locate the Firefox binary directory from config, environment, or defaults.
 
     Checks (in order):
       1. FIREFOX_PATH environment variable
       2. FIREFOX_PATH in browse.conf
       3. TBB_PATH in browse.conf (backwards compatibility)
       4. TBB_PATH environment variable (backwards compatibility)
+      5. Platform-specific default install locations (macOS, Windows)
 
     Returns:
         Path string, or None if not found.
@@ -135,6 +156,11 @@ def find_firefox_path():
     if tp_env and os.path.isdir(tp_env):
         return tp_env
 
+    # Platform-specific default locations (useful on macOS/Windows without config)
+    for p in _platform_firefox_defaults():
+        if os.path.isdir(p):
+            return p
+
     return None
 
 
@@ -147,6 +173,7 @@ def find_geckodriver_path():
         return gp
 
     import shutil
+    # shutil.which handles .exe extension on Windows automatically
     system = shutil.which("geckodriver")
     if system:
         return system
@@ -157,12 +184,33 @@ def find_geckodriver_path():
 # ─── Environment Setup ────────────────────────────────────────────────────
 
 def setup_env(firefox_path):
-    """Set LD_LIBRARY_PATH so Firefox can find its bundled shared libs."""
-    os.environ["LD_LIBRARY_PATH"] = firefox_path
+    """Set library search path so Firefox can find its bundled shared libs.
+
+    Linux:   LD_LIBRARY_PATH
+    macOS:   DYLD_LIBRARY_PATH
+    Windows: os.add_dll_directory() (Python 3.8+)
+    """
+    if sys.platform == "darwin":
+        existing = os.environ.get("DYLD_LIBRARY_PATH", "")
+        if firefox_path not in existing.split(os.pathsep):
+            os.environ["DYLD_LIBRARY_PATH"] = (
+                firefox_path + os.pathsep + existing if existing else firefox_path
+            )
+    elif sys.platform == "win32":
+        try:
+            os.add_dll_directory(firefox_path)
+        except AttributeError:
+            pass  # Python < 3.8 fallback — PATH alone usually works on Windows
+    else:
+        existing = os.environ.get("LD_LIBRARY_PATH", "")
+        if firefox_path not in existing.split(os.pathsep):
+            os.environ["LD_LIBRARY_PATH"] = (
+                firefox_path + os.pathsep + existing if existing else firefox_path
+            )
     # Prepend to PATH so child processes can find the firefox binary
     path = os.environ.get("PATH", "")
-    if firefox_path not in path.split(":"):
-        os.environ["PATH"] = firefox_path + ":" + path
+    if firefox_path not in path.split(os.pathsep):
+        os.environ["PATH"] = firefox_path + os.pathsep + path
 
 
 # ─── Chrome-Context Pref Setter ───────────────────────────────────────────
@@ -231,8 +279,9 @@ def launch_firefox(firefox_path=None, geckodriver_path=None,
             "geckodriver not found. Run setup.sh or install geckodriver."
         )
 
-    # Find the firefox binary
-    fx_binary = os.path.join(firefox_path, "firefox")
+    # Find the firefox binary (platform-specific name)
+    fx_name = "firefox.exe" if sys.platform == "win32" else "firefox"
+    fx_binary = os.path.join(firefox_path, fx_name)
     if not os.path.isfile(fx_binary):
         raise FileNotFoundError(f"Firefox binary not found at {fx_binary}")
 
@@ -379,6 +428,31 @@ tab[browse-agent="active"] .tab-line {
 tab[browse-agent="active"][selected] .tab-background {
   outline: 1px solid rgba(255, 0, 170, 0.8) !important;
   animation: browse-tab-pulse 1s ease-in-out infinite !important;
+}
+
+/* Private tab — hidden from AI agent (blue tint, contrasts with pink agent tabs) */
+tab[browse-private="true"] .tab-background {
+  background: rgba(88, 166, 255, 0.12) !important;
+  outline: 1px solid rgba(88, 166, 255, 0.35) !important;
+  outline-offset: -1px;
+}
+
+tab[browse-private="true"] .tab-line {
+  background-color: #58a6ff !important;
+  opacity: 1 !important;
+  height: 2px !important;
+}
+
+tab[browse-private="true"][selected] .tab-background {
+  background: rgba(88, 166, 255, 0.2) !important;
+  outline: 1px solid rgba(88, 166, 255, 0.5) !important;
+}
+
+tab[browse-private="true"] .tab-content::before {
+  content: "\1F512";
+  font-size: 9px;
+  margin-inline-end: 4px;
+  opacity: 0.8;
 }
 
 """

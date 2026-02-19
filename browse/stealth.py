@@ -2,9 +2,10 @@
 
 Three layers:
 
-Layer 1 — Binary patch: Replaces the "webdriver" string in libxul.so so the
-    navigator.webdriver property ceases to exist entirely. Not overridden,
-    not false — genuinely undefined, same as a normal browser.
+Layer 1 — Binary patch: Replaces the "webdriver" string in the Firefox engine
+    library (libxul.so / libxul.dylib / xul.dll) so the navigator.webdriver
+    property ceases to exist entirely. Not overridden, not false — genuinely
+    undefined, same as a normal browser.
 
 Layer 1b — Omni.ja patch: Replaces the red candy-stripe automation indicator
     CSS with hidden rules so the candycane never appears.
@@ -14,6 +15,7 @@ Layer 2 — WebExtension: Injects a content script at document_start in the
     as defense-in-depth. Also manages per-tab agent indicators and theme.
 
 All patches work on both Firefox ESR and Tor Browser (same engine).
+Platform support: Linux, macOS, Windows.
 """
 
 import json
@@ -21,15 +23,29 @@ import os
 import random
 import shutil
 import string
+import sys
 import tempfile
 import zipfile
 
 
+# ─── Platform helpers ─────────────────────────────────────────────────────
+
+def _libxul_name():
+    """Return the platform-specific Firefox engine library filename."""
+    if sys.platform == "darwin":
+        return "libxul.dylib"
+    elif sys.platform == "win32":
+        return "xul.dll"
+    else:
+        return "libxul.so"
+
+
 # ─── Layer 1: Binary Patch ────────────────────────────────────────────────
 
-# The WebIDL property name in libxul.so. When replaced, navigator.webdriver
-# ceases to exist. Marionette still works because its control protocol
-# doesn't depend on this DOM property name.
+# The WebIDL property name in the Firefox engine library. When replaced,
+# navigator.webdriver ceases to exist. Marionette still works because its
+# control protocol doesn't depend on this DOM property name.
+# The patch is a plain string replace — works on ELF, Mach-O, and PE binaries.
 _PATCH_TARGET = b"webdriver"
 
 # File that records what we patched (so we can verify / re-patch)
@@ -42,28 +58,52 @@ def _generate_replacement(length):
 
 
 def _find_libxul(firefox_path):
-    """Locate libxul.so in a Firefox or Tor Browser directory."""
-    # Firefox ESR: libxul.so is at the root
-    candidate = os.path.join(firefox_path, "libxul.so")
+    """Locate the Firefox engine library in a Firefox or Tor Browser directory.
+
+    Platform-specific filenames:
+      Linux:   libxul.so
+      macOS:   libxul.dylib  (inside Firefox.app/Contents/MacOS/)
+      Windows: xul.dll
+    """
+    name = _libxul_name()
+    # Firefox ESR: engine lib at the root of the install dir
+    candidate = os.path.join(firefox_path, name)
     if os.path.exists(candidate):
         return candidate
-    # Tor Browser: libxul.so is under Browser/
-    candidate = os.path.join(firefox_path, "Browser", "libxul.so")
+    # Tor Browser: engine lib is under Browser/
+    candidate = os.path.join(firefox_path, "Browser", name)
     if os.path.exists(candidate):
         return candidate
     return None
 
 
 def _find_omni(firefox_path):
-    """Locate browser/omni.ja in a Firefox or Tor Browser directory."""
-    # Firefox ESR: browser/omni.ja at the root
-    candidate = os.path.join(firefox_path, "browser", "omni.ja")
-    if os.path.exists(candidate):
-        return candidate
-    # Tor Browser: Browser/browser/omni.ja
-    candidate = os.path.join(firefox_path, "Browser", "browser", "omni.ja")
-    if os.path.exists(candidate):
-        return candidate
+    """Locate browser/omni.ja in a Firefox or Tor Browser directory.
+
+    macOS note: Firefox.app has a split layout — the binary lives in
+    Contents/MacOS/ but omni.ja lives in Contents/Resources/browser/.
+    firefox_path on macOS should point to Contents/MacOS/, so we probe
+    ../Resources/browser/omni.ja as well as the standard relative path.
+    """
+    if sys.platform == "darwin":
+        # macOS Firefox.app: Contents/Resources/browser/omni.ja
+        resources = os.path.normpath(os.path.join(firefox_path, "..", "Resources"))
+        candidate = os.path.join(resources, "browser", "omni.ja")
+        if os.path.exists(candidate):
+            return candidate
+        # Tor Browser on macOS (same Browser/ subdir convention)
+        candidate = os.path.join(firefox_path, "Browser", "browser", "omni.ja")
+        if os.path.exists(candidate):
+            return candidate
+    else:
+        # Linux and Windows: browser/omni.ja relative to the install root
+        candidate = os.path.join(firefox_path, "browser", "omni.ja")
+        if os.path.exists(candidate):
+            return candidate
+        # Tor Browser
+        candidate = os.path.join(firefox_path, "Browser", "browser", "omni.ja")
+        if os.path.exists(candidate):
+            return candidate
     return None
 
 
@@ -434,6 +474,12 @@ _INDICATOR_MANIFEST = {
     "background": {
         "scripts": ["indicator.js"],
     },
+    "commands": {
+        "toggle-private": {
+            "suggested_key": {"default": "Ctrl+Shift+P"},
+            "description": "Toggle private tab (hide from AI agent)",
+        },
+    },
 }
 
 _INDICATOR_SCRIPT = """
@@ -551,6 +597,23 @@ browser.runtime.onMessage.addListener(async (msg, sender) => {
         body: JSON.stringify({dismiss_tab: sender.tab.index}),
       });
     } catch(e) {}
+  }
+});
+
+// Toggle private tab via keyboard shortcut (Ctrl+Shift+P).
+// Posts to status server, which sets/removes browse-private XUL attribute.
+browser.commands.onCommand.addListener(async (command) => {
+  if (command === "toggle-private") {
+    const tabs = await browser.tabs.query({active: true, currentWindow: true});
+    if (tabs.length > 0) {
+      try {
+        await fetch("http://127.0.0.1:" + STATUS_PORT + "/", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({toggle_private: tabs[0].index}),
+        });
+      } catch(e) {}
+    }
   }
 });
 
