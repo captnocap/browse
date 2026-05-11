@@ -10,6 +10,14 @@ git clone https://github.com/captnocap/browse.git && cd browse && ./setup.sh
 
 Linux x86_64, Python 3.10+. Setup downloads Firefox ESR, patches it, and configures your AI frontend. After setup, just ask your AI to browse — it launches the browser automatically.
 
+For one-shot CLI fetches that just work — no captchas, no bot walls, real browser:
+
+```bash
+browse curl https://example.com                 # fetch a page
+browse search "best espresso machines 2026"     # Google SERP
+browse asearch "claude opus 4.7 release notes"  # multi-engine, ranked by overlap
+```
+
 For Python usage:
 
 ```python
@@ -29,6 +37,7 @@ Firefox with `privacy.resistFingerprinting` solves this at the C++ level. Canvas
 
 ## What it does
 
+- **One-shot CLI fetch** — `browse curl`, `browse search`, `browse asearch` for curl-style scraping that doesn't trip bot walls, with cross-engine result ranking
 - **Native anti-fingerprinting** — canvas noise, WebGL spoofing, font restriction, letterboxing, timer clamping — all C++-level via RFP, no JS injection
 - **Binary-patched `navigator.webdriver`** — the property doesn't exist (not overridden to `false`, genuinely `undefined`)
 - **Prompt injection filtering** — extracts only visible page content, strips 15+ CSS hiding tricks used to inject hidden instructions for AI agents
@@ -146,6 +155,42 @@ browse blocklist
 ```
 
 Subdomains are matched automatically — blocking `4chan.org` also blocks `boards.4chan.org`.
+
+## CLI fetch — curl, search, asearch
+
+One-shot commands that drive the real stealth browser and print the result to stdout. If a session is running they attach to it (logged-in cookies come along); if not, they spawn a temporary browser with your persistent profile and tear it down after — so Google won't gate you for being a zero-history identity.
+
+```bash
+# Fetch a page — defaults to LLM-formatted text with link/form summaries
+browse curl https://example.com
+
+# Other output modes
+browse curl https://example.com --text       # plain text only
+browse curl https://example.com --json       # structured JSON
+browse curl https://example.com --links      # tab-separated href<TAB>text
+browse curl https://example.com --html       # raw page source
+browse curl https://example.com -o page.txt  # save instead of printing
+
+# Single-engine search (real SERP, real browser)
+browse search "best espresso machines 2026"
+browse search "site:reddit.com browse python" --engine ddg
+
+# Multi-engine ranked search — scores each result by cross-engine overlap
+browse asearch "claude opus 4.7 release notes" --top 10
+```
+
+`asearch` queries Google, DuckDuckGo, and Bing in turn, normalizes URLs (strips tracking params, www., trailing slashes, unwraps Bing's `/ck/a` redirects), then ranks by how many engines agree on each result:
+
+```
+[3/3] (b=2,d=3,g=1)  Introducing Claude Opus 4.7
+        https://anthropic.com/news/claude-opus-4-7
+[3/3] (b=1,d=2,g=4)  Release notes | Claude Help Center
+        https://support.claude.com/en/articles/12138966-release-notes
+[2/3] (b=4,d=4)      Some site Google didn't surface
+        https://example.com/article
+```
+
+The `(b=2,d=3,g=1)` annotation shows the rank each engine assigned. Flags shared across `curl`/`search`/`asearch`: `--timeout N`, `--wait N` (post-load settle), `--quick` (force fresh browser instead of the running session), `--screenshot path`, `-o file`.
 
 ## API
 
@@ -368,6 +413,7 @@ The MCP server supports two modes that the AI agent picks based on context:
 | `browse_open` | Launch a new browser (optionally navigate to URL) |
 | `browse_connect` | Join an existing human browser session |
 | `browse_navigate` | Go to a URL in a browser |
+| `browse_fetch` | One-shot curl-style fetch (url or search query), no browser ID, auto-cleanup |
 | `browse_search` | Search Google/DuckDuckGo (auto-opens browser if needed) |
 | `browse_click` | Click an element on the page |
 | `browse_type` | Type into an input field, optionally submit |

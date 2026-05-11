@@ -503,6 +503,195 @@ def _handle_search(args):
             agent.detach()
 
 
+# ─── Advanced multi-engine search ─────────────────────────────────────────
+
+ASEARCH_ENGINES = {
+    "google": "https://www.google.com/search?q={}",
+    "duckduckgo": "https://duckduckgo.com/?q={}",
+    "bing": "https://www.bing.com/search?q={}",
+}
+
+_NAV_HOSTS = {
+    "google": ("google.com", "gstatic.com", "googleusercontent.com",
+               "googleadservices.com"),
+    "duckduckgo": ("duckduckgo.com", "duck.com", "duck.ai", "spreadprivacy.com"),
+    "bing": ("bing.com", "microsoft.com", "microsofttranslator.com",
+             "msn.com", "go.microsoft.com"),
+}
+
+
+def _host_is_nav(host, engine):
+    host = host.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    for bad in _NAV_HOSTS[engine]:
+        if host == bad or host.endswith("." + bad):
+            return True
+    return False
+
+
+def _bing_unwrap(url):
+    """Unwrap bing.com/ck/a redirect URLs to recover the real destination."""
+    if "bing.com/ck/a" not in url:
+        return url
+    from urllib.parse import urlparse, parse_qs
+    import base64
+    try:
+        q = parse_qs(urlparse(url).query)
+        u = q.get("u", [None])[0]
+        if not u or len(u) < 3:
+            return url
+        b = u[2:] + "=" * (-(len(u) - 2) % 4)
+        decoded = base64.urlsafe_b64decode(b).decode("utf-8", errors="ignore")
+        if decoded.startswith("http"):
+            return decoded
+    except Exception:
+        pass
+    return url
+
+
+def _normalize_result_url(url):
+    """Lowercase host, strip www., strip tracking params, strip trailing slash."""
+    from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+    BAD = {"utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term",
+           "fbclid", "gclid", "ref", "ref_src", "_ga", "mc_cid", "mc_eid",
+           "sca_esv", "sa", "ved", "usg", "ictx", "fbs", "aep", "ntc",
+           "source", "ei", "iflsig", "uact", "oq", "sourceid"}
+    try:
+        p = urlparse(url)
+    except Exception:
+        return None
+    if p.scheme not in ("http", "https"):
+        return None
+    host = p.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    qs = [(k, v) for k, v in parse_qsl(p.query) if k.lower() not in BAD]
+    path = p.path.rstrip("/") or "/"
+    query = urlencode(qs) if qs else ""
+    return urlunparse((p.scheme, host, path, "", query, ""))
+
+
+def _extract_results(content, engine):
+    """Filter PageContent.links to real result links for one engine.
+
+    Returns deduped, ordered list of (normalized_url, display_text).
+    """
+    from urllib.parse import urlparse
+    seen = set()
+    results = []
+    for link in content.links:
+        href = link.href.strip()
+        if not href.startswith(("http://", "https://")):
+            continue
+        if engine == "bing":
+            href = _bing_unwrap(href)
+        try:
+            host = urlparse(href).netloc.lower()
+        except Exception:
+            continue
+        if not host or _host_is_nav(host, engine):
+            continue
+        norm = _normalize_result_url(href)
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        text = (link.text or "").strip() or host
+        results.append((norm, text))
+    return results
+
+
+def _handle_asearch(args):
+    usage = (
+        "Usage: browse asearch <query...> [--engines google,duckduckgo,bing] "
+        "[--json] [-o file] [--timeout N] [--wait N] [--quick] [--top N]"
+    )
+    engines = list(ASEARCH_ENGINES.keys())
+    top = 25
+    cleaned = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--engines":
+            engines = [e.strip() for e in args[i + 1].split(",") if e.strip()]
+            i += 2
+            continue
+        if args[i] == "--top":
+            top = int(args[i + 1])
+            i += 2
+            continue
+        cleaned.append(args[i])
+        i += 1
+
+    unknown = [e for e in engines if e not in ASEARCH_ENGINES]
+    if unknown:
+        print(f"Unknown engines: {', '.join(unknown)}", file=sys.stderr)
+        print(f"Available: {', '.join(ASEARCH_ENGINES)}", file=sys.stderr)
+        sys.exit(2)
+
+    positional, opts = _parse_fetch_args(cleaned, usage)
+    if not positional:
+        print(usage, file=sys.stderr)
+        sys.exit(1)
+
+    from urllib.parse import quote_plus
+    query = " ".join(positional)
+    encoded = quote_plus(query)
+
+    # Default settle wait — Bing especially needs JS to render results.
+    settle = opts["wait"] if opts["wait"] else 2.0
+
+    agent, owns = _acquire_agent(prefer_session=not opts["quick"])
+    rank_score = {}  # normalized_url -> {"text": str, "engines": {engine: rank}}
+    try:
+        import time
+        for engine in engines:
+            url = ASEARCH_ENGINES[engine].format(encoded)
+            print(f"[browse] querying {engine}...", file=sys.stderr)
+            content = agent.navigate(url, timeout=opts["timeout"])
+            time.sleep(settle)
+            content = agent.extract_content()
+            results = _extract_results(content, engine)
+            for rank, (norm, text) in enumerate(results[:50], 1):
+                entry = rank_score.setdefault(norm, {"text": text, "engines": {}})
+                if len(text) > len(entry["text"]):
+                    entry["text"] = text
+                entry["engines"][engine] = rank
+    finally:
+        if owns:
+            agent.quit()
+        else:
+            agent.detach()
+
+    def score(entry):
+        # Primary: number of engines it appeared on. Tiebreaker: sum of 1/rank.
+        return (len(entry["engines"]),
+                sum(1.0 / r for r in entry["engines"].values()))
+
+    ranked = sorted(rank_score.items(), key=lambda kv: score(kv[1]),
+                    reverse=True)[:top]
+    n_engines = len(engines)
+
+    if opts["mode"] == "json":
+        import json
+        payload = json.dumps([
+            {"url": norm, "title": e["text"],
+             "engines": e["engines"], "overlap": len(e["engines"]),
+             "max_overlap": n_engines}
+            for norm, e in ranked
+        ], indent=2)
+        _emit(payload, opts["output"])
+        return
+
+    lines = [f"Advanced search: {query!r} across {', '.join(engines)}", ""]
+    for norm, e in ranked:
+        engs = sorted(e["engines"].keys())
+        ranks = ",".join(f"{k[:1]}={e['engines'][k]}" for k in engs)
+        lines.append(
+            f"[{len(e['engines'])}/{n_engines}] ({ranks})  {e['text'][:80]}")
+        lines.append(f"        {norm}")
+    _emit("\n".join(lines), opts["output"])
+
+
 def main():
     args = sys.argv[1:]
 
@@ -520,6 +709,10 @@ def main():
 
     if cmd == "search":
         _handle_search(args[1:])
+        return
+
+    if cmd in ("asearch", "search-all"):
+        _handle_asearch(args[1:])
         return
 
     if cmd == "block":
@@ -697,5 +890,5 @@ def main():
 
     else:
         print(f"Unknown command: {cmd}")
-        print("Usage: browse [curl|search|block|unblock|blocklist|cookies|scripts|run|profile]")
+        print("Usage: browse [curl|search|asearch|block|unblock|blocklist|cookies|scripts|run|profile]")
         sys.exit(1)
