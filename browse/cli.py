@@ -2,6 +2,8 @@
 
     browse                          — launch a persistent browser session
     browse --disposable             — launch with a temporary profile
+    browse curl <url>               — fetch a URL via the real stealth browser
+    browse search <query>           — Google search via the real stealth browser
     browse block <domain>           — block a domain from agent navigation
     browse block --preset <name>    — block a curated set of domains
     browse unblock <domain>         — unblock a domain
@@ -290,6 +292,217 @@ def _set_conf(key, value):
         f.writelines(new_lines)
 
 
+def _read_conf():
+    """Read browse.conf into a dict."""
+    conf = {}
+    if not os.path.exists(CONF_PATH):
+        return conf
+    with open(CONF_PATH) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                conf[k.strip()] = v.strip()
+    return conf
+
+
+def _acquire_agent(prefer_session=True, quiet=False):
+    """Return (agent, owns) — connect to running session if available, else spawn quick.
+
+    Quick mode reuses the persistent profile from browse.conf so cookies/history
+    survive (Google etc. won't gate a zero-history profile). Profile lock is free
+    because we only spawn quick when no session is running.
+    """
+    from .agent import AgentBrowser
+    if prefer_session:
+        from .session import get_session_info
+        if get_session_info():
+            if not quiet:
+                print("[browse] using running session", file=sys.stderr)
+            return AgentBrowser.connect(), False
+    conf = _read_conf()
+    profile_path = None
+    if conf.get("PROFILE_MODE", "persistent") == "persistent":
+        path = conf.get("PROFILE_PATH")
+        if path and os.path.isdir(os.path.expanduser(path)):
+            profile_path = os.path.expanduser(path)
+    if not quiet:
+        if profile_path:
+            print(f"[browse] no session — spawning quick browser with persistent profile",
+                  file=sys.stderr)
+        else:
+            print("[browse] no session running — spawning quick browser (disposable)",
+                  file=sys.stderr)
+    return AgentBrowser(profile_path=profile_path), True
+
+
+def _render_content(content, mode):
+    """Render PageContent in the requested output mode."""
+    import json
+    if mode == "json":
+        return json.dumps({
+            "url": content.url,
+            "title": content.title,
+            "text": content.text,
+            "links": [{"text": l.text, "href": l.href} for l in content.links],
+            "forms": [{"action": f.action, "method": f.method,
+                       "fields": [{"name": ff.name, "type": ff.type,
+                                   "value": ff.value, "placeholder": ff.placeholder}
+                                  for ff in f.fields]}
+                      for f in content.forms],
+        }, indent=2)
+    if mode == "text":
+        return content.text
+    if mode == "links":
+        return "\n".join(f"{l.href}\t{l.text}" for l in content.links)
+    if mode == "html":
+        # Caller should pass page_source separately
+        return content
+    return content.for_llm()
+
+
+def _parse_fetch_args(args, usage):
+    """Parse shared flags for curl/search. Returns (positional, opts)."""
+    opts = {"mode": "llm", "output": None, "screenshot": None,
+            "timeout": 30, "wait": 0, "quick": False, "html": False}
+    positional = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--json",):
+            opts["mode"] = "json"
+        elif a in ("--text",):
+            opts["mode"] = "text"
+        elif a in ("--links",):
+            opts["mode"] = "links"
+        elif a in ("--html",):
+            opts["html"] = True
+        elif a in ("-o", "--output"):
+            i += 1
+            opts["output"] = args[i]
+        elif a == "--screenshot":
+            i += 1
+            opts["screenshot"] = args[i]
+        elif a in ("--timeout",):
+            i += 1
+            opts["timeout"] = int(args[i])
+        elif a in ("--wait",):
+            i += 1
+            opts["wait"] = float(args[i])
+        elif a == "--quick":
+            opts["quick"] = True
+        elif a in ("-h", "--help"):
+            print(usage)
+            sys.exit(0)
+        elif a.startswith("-"):
+            print(f"Unknown option: {a}\n{usage}", file=sys.stderr)
+            sys.exit(2)
+        else:
+            positional.append(a)
+        i += 1
+    return positional, opts
+
+
+def _emit(payload, output):
+    if output:
+        mode = "wb" if isinstance(payload, (bytes, bytearray)) else "w"
+        with open(output, mode) as f:
+            f.write(payload)
+        print(f"[browse] wrote {output}", file=sys.stderr)
+    else:
+        if isinstance(payload, (bytes, bytearray)):
+            sys.stdout.buffer.write(payload)
+        else:
+            print(payload)
+
+
+def _handle_curl(args):
+    usage = (
+        "Usage: browse curl <url> [--json|--text|--links|--html] "
+        "[-o file] [--screenshot path] [--timeout N] [--wait N] [--quick]"
+    )
+    positional, opts = _parse_fetch_args(args, usage)
+    if not positional:
+        print(usage, file=sys.stderr)
+        sys.exit(1)
+    url = positional[0]
+    if "://" not in url:
+        url = "https://" + url
+
+    agent, owns = _acquire_agent(prefer_session=not opts["quick"])
+    try:
+        content = agent.navigate(url, timeout=opts["timeout"])
+        if opts["wait"]:
+            import time
+            time.sleep(opts["wait"])
+            content = agent.extract_content()
+        if opts["screenshot"]:
+            agent.screenshot(opts["screenshot"])
+            print(f"[browse] screenshot saved to {opts['screenshot']}",
+                  file=sys.stderr)
+        if opts["html"]:
+            _emit(agent.page_source, opts["output"])
+        else:
+            _emit(_render_content(content, opts["mode"]), opts["output"])
+    finally:
+        if owns:
+            agent.quit()
+        else:
+            agent.detach()
+
+
+def _handle_search(args):
+    usage = (
+        "Usage: browse search <query...> [--json|--text|--links|--html] "
+        "[-o file] [--screenshot path] [--timeout N] [--wait N] [--quick] "
+        "[--engine google|ddg]"
+    )
+    # Extract --engine before generic parse
+    engine = "google"
+    cleaned = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--engine":
+            engine = args[i + 1]
+            i += 2
+            continue
+        cleaned.append(args[i])
+        i += 1
+
+    positional, opts = _parse_fetch_args(cleaned, usage)
+    if not positional:
+        print(usage, file=sys.stderr)
+        sys.exit(1)
+
+    from urllib.parse import quote_plus
+    query = " ".join(positional)
+    if engine == "ddg":
+        url = f"https://duckduckgo.com/?q={quote_plus(query)}"
+    else:
+        url = f"https://www.google.com/search?q={quote_plus(query)}"
+
+    agent, owns = _acquire_agent(prefer_session=not opts["quick"])
+    try:
+        content = agent.navigate(url, timeout=opts["timeout"])
+        if opts["wait"]:
+            import time
+            time.sleep(opts["wait"])
+            content = agent.extract_content()
+        if opts["screenshot"]:
+            agent.screenshot(opts["screenshot"])
+            print(f"[browse] screenshot saved to {opts['screenshot']}",
+                  file=sys.stderr)
+        if opts["html"]:
+            _emit(agent.page_source, opts["output"])
+        else:
+            _emit(_render_content(content, opts["mode"]), opts["output"])
+    finally:
+        if owns:
+            agent.quit()
+        else:
+            agent.detach()
+
+
 def main():
     args = sys.argv[1:]
 
@@ -300,6 +513,14 @@ def main():
         return
 
     cmd = args[0]
+
+    if cmd == "curl":
+        _handle_curl(args[1:])
+        return
+
+    if cmd == "search":
+        _handle_search(args[1:])
+        return
 
     if cmd == "block":
         if len(args) < 2:
@@ -476,5 +697,5 @@ def main():
 
     else:
         print(f"Unknown command: {cmd}")
-        print("Usage: browse [block|unblock|blocklist|cookies|scripts|run|profile]")
+        print("Usage: browse [curl|search|block|unblock|blocklist|cookies|scripts|run|profile]")
         sys.exit(1)

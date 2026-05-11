@@ -448,6 +448,59 @@ def browse_search(query: str, engine: str = "google", browser_id: str = "") -> s
 
 
 @mcp.tool
+def browse_fetch(url: str = "", search: str = "") -> str:
+    """One-shot curl-style fetch through the real stealth browser. No browser ID, no follow-up state.
+
+    Use this when you just need the content of a page or a search result and won't be
+    interacting further. Bypasses bot detection (Firefox ESR + RFP), uses the user's
+    running session if available (so you get their logged-in cookies), otherwise spawns
+    a temporary browser and tears it down after.
+
+    For interactive flows where you'll click/type after, use browse_navigate or
+    browse_search instead — those keep the browser open.
+
+    Args:
+        url: URL to fetch. If it omits a scheme, "https://" is prepended.
+        search: Search query (uses Google). Provide this OR url, not both.
+    """
+    if not url and not search:
+        return "Provide either url= or search=."
+    if url and search:
+        return "Provide only one of url= or search=, not both."
+
+    if search:
+        from urllib.parse import quote_plus
+        target = f"https://www.google.com/search?q={quote_plus(search)}"
+    else:
+        target = url if "://" in url else "https://" + url
+
+    session = get_session_info()
+    if session:
+        client = SessionClient(port=session["port"])
+        client.send({"cmd": "ping"})
+        browser = {"driver": None, "mode": "session", "client": client}
+        try:
+            content = _navigate(browser, target)
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+    else:
+        driver = launch_session()
+        browser = {"driver": driver, "mode": "quick", "client": None}
+        try:
+            content = _navigate(browser, target)
+        finally:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+
+    return content.for_llm()
+
+
+@mcp.tool
 def browse_click(selector: str, browser_id: str = "") -> str:
     """Click an element on the page. Waits for the page to settle, then returns updated content — no need to call browse_extract after this.
 
